@@ -1,0 +1,10 @@
+numpy
+tqdm
+scikit-learn
+torch
+torchvision
+gpytorch
+botorch
+plotly
+kaleido
+ray[tune]
