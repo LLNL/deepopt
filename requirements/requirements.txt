@@ -8,5 +8,4 @@ botorch
 plotly
 kaleido
 ray[tune]
-scipy[optimize]
-scipy[stats]
+scipy
