@@ -35,7 +35,7 @@ def reqs(*f):
 
 def install_requires():
     """Get list of requirements required for installation."""
-    return reqs("default.txt")
+    return reqs("requirements.txt")
 
 
 with open("README.md", "r") as readme:
@@ -60,20 +60,20 @@ setup(
     url="https://lc.llnl.gov/gitlab/idesign/deepopt",
     install_requires=install_requires(),
     packages=find_packages(),
-    package_data={
-        "deepopt": [
-            "data/*",
-            "examples/*",
-        ],
-    },
+    # package_data={
+    #     "deepopt": [
+    #         "data/*",
+    #         "examples/*",
+    #     ],
+    # },
     python_requires=">=3.8",
     entry_points={
         'console_scripts': [
-            'deepopt-c = deepopt.scripts.deepopt_cli:main',
-            'deepopt-learner = deepopt.bayes_opt_example.scripts.learner:main',
-            'deepopt-optimize = deepopt.bayes_opt_example.scripts.get_candidates:main',
-            'deepopt-learner-mf = deepopt.multi_fidelity_bayes_opt_example.scripts.learner_mf:main',
-            'deepopt-optimize-mf = deepopt.multi_fidelity_bayes_opt_example.scripts.get_candidates_mf:main',
+            'deepopt-c = deepopt.deepopt_cli:main',
+            # 'deepopt-learner = deepopt.bayes_opt_example.scripts.learner:main',
+            # 'deepopt-optimize = deepopt.bayes_opt_example.scripts.get_candidates:main',
+            # 'deepopt-learner-mf = deepopt.multi_fidelity_bayes_opt_example.scripts.learner_mf:main',
+            # 'deepopt-optimize-mf = deepopt.multi_fidelity_bayes_opt_example.scripts.get_candidates_mf:main',
         ]
     },
     version=version,
