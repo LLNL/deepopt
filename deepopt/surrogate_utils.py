@@ -11,9 +11,6 @@ from math import cos
 from torch.optim import Adam, SGD
 
 
-device = 'cpu' #'cuda' if torch.cuda.is_available() else 'cpu' #
-
-
 class MLPLayer(nn.Module):
     def __init__(self, activation, input_dim, output_dim, do=True, dop=0.3, bn=True, is_first=False, is_last=False):
         super().__init__()

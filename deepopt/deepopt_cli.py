@@ -154,9 +154,9 @@ class DeepoptConfigure:
             Dict[str, Any]: A dictionary representing the score.
         """
         set_deepopt_path()
-        from deepopt.single_fidelity_opt.surrogate_util import MLP as Arch
-        from deepopt.single_fidelity_opt.surrogate_util import create_optimizer
-        from deepopt.single_fidelity_opt.models.deltaenc import DeltaEnc, DeltaEncMF
+        from deepopt.surrogate_utils import MLP as Arch
+        from deepopt.surrogate_utils import create_optimizer
+        from deepopt.deltaenc import DeltaEnc, DeltaEncMF
         
 
         self.config['variance'] = ray_config["variance"]  # (2**-3)**2
@@ -254,9 +254,9 @@ class DeepoptConfigure:
 
         print("Training DelUQ Surrogate.")
         set_deepopt_path()
-        from deepopt.single_fidelity_opt.surrogate_util import MLP as Arch
-        from deepopt.single_fidelity_opt.surrogate_util import create_optimizer
-        from deepopt.single_fidelity_opt.models.deltaenc import DeltaEnc, DeltaEncMF
+        from deepopt.surrogate_utils import MLP as Arch
+        from deepopt.surrogate_utils import create_optimizer
+        from deepopt.deltaenc import DeltaEnc, DeltaEncMF
 
 
         warnings.filterwarnings("ignore", category=UserWarning)
@@ -357,9 +357,9 @@ class DeepoptConfigure:
     def _load_deluq(self, learner_file: str) -> Type[Model]:
 
         set_deepopt_path()
-        from deepopt.single_fidelity_opt.surrogate_util import MLP as Arch
-        from deepopt.single_fidelity_opt.surrogate_util import create_optimizer
-        from deepopt.single_fidelity_opt.models.deltaenc import DeltaEnc, DeltaEncMF
+        from deepopt.surrogate_utils import MLP as Arch
+        from deepopt.surrogate_utils import create_optimizer
+        from deepopt.deltaenc import DeltaEnc, DeltaEncMF
     
         model = Arch(self.config, 'deltaenc', self.input_dim, self.output_dim).to(self.device)
         opt = create_optimizer(model, self.config)
@@ -416,7 +416,7 @@ class DeepoptConfigure:
         n_fantasies: int = 128):
 
         set_deepopt_path()
-        from deepopt.single_fidelity_opt.acquisition import qMultiFidelityMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy
+        from deepopt.acquisition import qMultiFidelityMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy
         
         bounds = torch.FloatTensor(self.input_dim*[[0,1]]).T
         bounds[1,-1] = self.num_fidelities-1
@@ -508,7 +508,7 @@ class DeepoptConfigure:
     ) -> Tuple[Any, Any]:
         
         set_deepopt_path()
-        from deepopt.single_fidelity_opt.acquisition import qMaxValueEntropy, qLowerBoundMaxValueEntropy
+        from deepopt.acquisition import qMaxValueEntropy, qLowerBoundMaxValueEntropy
         
         bounds = torch.FloatTensor(self.input_dim*[[0,1]]).T
         

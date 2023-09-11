@@ -10,3 +10,7 @@ kaleido
 ray[tune]
 scipy[optimize]
 scipy[stats]
+click
+yaml
+psutil
+
