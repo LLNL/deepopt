@@ -26,46 +26,6 @@ class BaseModel(Model):
             for i in range(covar_diag.shape[-1]):
                 covars[...,i,i] = covar_diag[...,i]
             mvn = MultivariateNormal(means.squeeze(-1),covars)
-
-        # elif means.ndim == 3:
-        #     assert means.size(-1) == variances.size(-1) == 1
-        #     try:
-        #         mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
-        #     except RuntimeError:
-        #         print('RuntimeError')
-        #         print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
-        #     else:
-        #         mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
-                
-        # elif means.ndim > 3:
-        #     assert means.size(-1) == variances.size(-1) == 1
-        #     try:
-        #         covar_diag = variances.squeeze(-1) + 1e-6
-        #         covars = torch.zeros(*covar_diag.shape,covar_diag.shape[-1])
-        #         for i in range(covar_diag.shape[-1]):
-        #             covars[...,i,i] = covar_diag[...,i]
-        #         mvn = MultivariateNormal(means.squeeze(-1),covars)
-        #     except RuntimeError:
-        #         print('RuntimeError')
-        #         print(covar_diag)
-        #     else:
-        #         mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
-
-        # else:
-        #     raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
-
-            
-#        elif means.ndim == 3:
-#            assert means.size(-1) == variances.size(-1) == 1
-#            try:
-#                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
-#            except RuntimeError:
-#                print('RuntimeError')
-#                print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
-#
-#        else:
-#            raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
-
         return mvn
 
     @property

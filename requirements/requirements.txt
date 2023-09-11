@@ -8,4 +8,13 @@ botorch
 plotly
 kaleido
 ray[tune]
+<<<<<<< HEAD
 scipy
+=======
+scipy[optimize]
+scipy[stats]
+click
+yaml
+psutil
+
+>>>>>>> 367074d3dda570797ec454950daa211008494b81
