@@ -12,9 +12,10 @@ from botorch import fit_gpytorch_model
 from botorch.acquisition import PosteriorMean, qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.acquisition.cost_aware import InverseCostWeightedUtility
 from botorch.acquisition.fixed_feature import FixedFeatureAcquisitionFunction
-from botorch.acquisition.knowledge_gradient import qMultiFidelityKnowledgeGradient
+from botorch.acquisition.knowledge_gradient import qMultiFidelityKnowledgeGradient, qKnowledgeGradient
 from botorch.acquisition.max_value_entropy_search import qLowerBoundMaxValueEntropy
 from botorch.acquisition.risk_measures import CVaR, VaR, RiskMeasureMCObjective
+from botorch.acquisition.objective import ExpectationPosteriorTransform
 from botorch.acquisition.utils import project_to_target_fidelity
 from botorch.models.cost import AffineFidelityCostModel
 from botorch.models.gp_regression_fidelity import SingleTaskMultiFidelityGP, SingleTaskGP
@@ -86,8 +87,19 @@ class ConditionalOption(click.Option):
             value = None
             ctx.params[self.name] = value
         return value, args
-
-
+    
+class Defaults:
+    random_seed = 4321
+    k_folds = 5
+    model_type = 'GP'
+    multi_fidelity = False
+    num_candidates = 2
+    fidelity_cost = '[1,10]'
+    num_restarts_low = 5
+    num_restarts_high = 15
+    raw_samples_low = 512
+    raw_samples_high = 5000
+    
 @dataclass
 class DeepoptConfigure:
 
@@ -112,17 +124,20 @@ class DeepoptConfigure:
     def __post_init__(self) -> None:
 
         input_data = np.load(self.data_file)
-        self.X_orig = from_numpy(input_data["X"])
-        self.Y_orig = from_numpy(input_data["y"])
+        self.X_orig = from_numpy(input_data["X"]).float()
+        self.Y_orig = from_numpy(input_data["y"]).float()
+        if len(self.Y_orig.shape)==1:
+            self.Y_orig = self.Y_orig.reshape(-1,1)
         self.full_train_X = (self.X_orig-self.bounds[0])/(self.bounds[1]-self.bounds[0])
         if self.multi_fidelity:
             self.full_train_X[:,-1] = self.X_orig[:,-1].round()
             self.num_fidelities = int(self.bounds[1,-1]) + 1
         else:
             self.num_fidelities = 1
-        self.full_train_Y = from_numpy(input_data["y"])
+        self.full_train_Y = self.Y_orig.clone()
         self.input_dim = self.full_train_X.size(-1)
-        self.output_dim = 1
+        self.output_dim = self.full_train_Y.shape[-1]
+        assert self.output_dim==1, "Multi-output models not currently supported."
         self.target_fidelities = {self.input_dim-1: self.num_fidelities-1}
     
         with open(self.config_file, "r") as file:
@@ -412,7 +427,8 @@ class DeepoptConfigure:
         acq_method: str, 
         q: int, 
         fidelity_cost: ndarray, 
-        risk_objective: Type[RiskMeasureMCObjective] = None, 
+        risk_objective: Type[RiskMeasureMCObjective] = None,
+        risk_n_deltas: int = None, 
         n_fantasies: int = 128):
 
         set_deepopt_path()
@@ -425,7 +441,7 @@ class DeepoptConfigure:
         cost_aware_utility = InverseCostWeightedUtility(cost_model=cost_model)
 
         if acq_method == "GIBBON" or acq_method == "MaxValEntropy":
-            n_candidates = 5000
+            n_candidates = 2000*self.num_fidelities
             candidate_set = torch.rand(n_candidates, self.input_dim)
             candidate_set[:,-1]*=self.num_fidelities-1
             candidate_set[:,-1] = candidate_set[:,-1].round()
@@ -441,6 +457,7 @@ class DeepoptConfigure:
             else:
                 q_acq = qMultiFidelityLowerBoundMaxValueEntropy(
                     model,
+                    posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
                     num_fantasies=n_fantasies,
                     cost_aware_utility=cost_aware_utility,
                     project=self._project,
@@ -452,13 +469,13 @@ class DeepoptConfigure:
                 bounds=bounds,
                 fixed_features_list=[{self.input_dim-1:i} for i in range(self.num_fidelities)],
                 q=q,
-                num_restarts=15,
-                raw_samples=5000,
+                num_restarts=Defaults.num_restarts_high,
+                raw_samples=Defaults.raw_samples_high,
                 options={"seed": self.random_seed}
             )
         elif acq_method == "KG":
             curr_val_acqf = FixedFeatureAcquisitionFunction(
-                acq_function=PosteriorMean(model),
+                acq_function=PosteriorMean(model,posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None),
                 d=self.input_dim,
                 columns=[self.input_dim-1],
                 values=[self.num_fidelities-1],
@@ -468,8 +485,8 @@ class DeepoptConfigure:
                 acq_function=curr_val_acqf,
                 bounds=bounds[:, :-1],
                 q=1,
-                num_restarts=10,
-                raw_samples=1024,
+                num_restarts=Defaults.num_restarts_high,
+                raw_samples=Defaults.raw_samples_high,
                 options={"batch_limit": 10, "maxiter": 200, "seed": self.random_seed},
             )
 
@@ -483,15 +500,13 @@ class DeepoptConfigure:
                 project=self._project,
                 objective=risk_objective
             )
-            NUM_RESTARTS = 5
-            RAW_SAMPLES = 128
             candidates, acq_value = optimize_acqf_mixed(
                 acq_function=mfkg_acqf,
                 bounds=bounds,
                 fixed_features_list=[{self.input_dim-1:i} for i in range(self.num_fidelities)],
                 q=q,
-                num_restarts=NUM_RESTARTS,
-                raw_samples=RAW_SAMPLES,
+                num_restarts=Defaults.num_restarts_low,
+                raw_samples=Defaults.raw_samples_low,
                 options={"batch_limit": 5, "maxiter": 200, "seed": self.random_seed},
             )
 
@@ -504,6 +519,7 @@ class DeepoptConfigure:
         acq_method: str, 
         q: int,
         risk_objective: Type[RiskMeasureMCObjective] = None,
+        risk_n_deltas: int = None,
         n_fantasies: int = 128
     ) -> Tuple[Any, Any]:
         
@@ -517,25 +533,40 @@ class DeepoptConfigure:
         elif acq_method == "NEI":
             q_acq = qNoisyExpectedImprovement(model, self.full_train_X, objective=risk_objective, prune_baseline=True)
         elif acq_method == "MaxValEntropy":
-            n_candidates = 5000
+            n_candidates = 1000
             candidate_set = torch.rand(n_candidates, self.input_dim)
             q_acq = qMaxValueEntropy(
                 model,
+                posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
                 candidate_set=candidate_set,
                 num_fantasies = n_fantasies,
                 seed=self.random_seed
             )
-
+        elif acq_method == 'KG':
+            argmax_pmean, max_pmean = optimize_acqf(
+                acq_function=PosteriorMean(model,posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None),
+                bounds=bounds,
+                q=1,
+                num_restarts=Defaults.num_restarts_high,
+                raw_samples=Defaults.raw_samples_high,
+            )
+            q_acq = qKnowledgeGradient(
+                model=model,
+                num_fantasies=n_fantasies,
+                sampler=SobolQMCNormalSampler(n_fantasies,seed=self.random_seed),
+                inner_sampler=SobolQMCNormalSampler(n_fantasies,seed=self.random_seed),
+                current_value=max_pmean,
+                objective=risk_objective
+                )
         candidates, acq_value = optimize_acqf(
                 q_acq, 
                 bounds=bounds,
                 q=q,
-                num_restarts=15,
-                raw_samples=5000,
+                num_restarts=Defaults.num_restarts_high,
+                raw_samples=Defaults.raw_samples_low if acq_method in ['MaxValEntropy','KG'] else Defaults.raw_samples_high,
                 sequential=True if acq_method=='MaxValEntropy' else False,
                 options={'seed':self.random_seed}
-        )
-
+                )
         print(f"{acq_value=}")
         return candidates, q_acq
 
@@ -545,15 +576,16 @@ class DeepoptConfigure:
         acq_method: str, 
         q: int,
         risk_objective: Type[RiskMeasureMCObjective] = None,
+        risk_n_deltas: int = None,
         fidelity_cost: ndarray = None
         ) -> Tuple[Any, Any]:
         
         print(f"Number of simulations: {len(self.full_train_X)}. Current max: {self.full_train_Y.max().item():.5f}")
 
         if self.multi_fidelity:
-            candidates, acq_value = self._get_candidates_mf(model=model, acq_method=acq_method, q=q, fidelity_cost=fidelity_cost, risk_objective=risk_objective)
+            candidates, acq_value = self._get_candidates_mf(model=model, acq_method=acq_method, q=q, fidelity_cost=fidelity_cost, risk_objective=risk_objective,risk_n_deltas=risk_n_deltas)
         else:
-            candidates, acq_value = self._get_candidates_sf(model=model, acq_method=acq_method, q=q, risk_objective=risk_objective)
+            candidates, acq_value = self._get_candidates_sf(model=model, acq_method=acq_method, q=q, risk_objective=risk_objective,risk_n_deltas=risk_n_deltas)
         return candidates, acq_value
 
     def get_risk_measure_objective(self, risk_measure, **kwargs) -> Type[RiskMeasureMCObjective]:
@@ -586,18 +618,8 @@ def deepopt_cli(develop):
         DEVELOP = True
         set_deepopt_path()
 
-
-@deepopt_cli.command()
-@click.option("-i", "--infile", help="Input data to train from.", type=click.Path(exists=True), required=True)
-@click.option("-o", "--outfile", help="Outfile to save model checkpoint.", type=click.STRING, required=True)
-@click.option("-c", "--config-file", help="Config file containing hyper parameters.", type=click.Path(exists=True), required=True)
-@click.option("-b","--bounds", help="Bounds for each input dimension.", type=click.STRING, required=True)
-@click.option("-r", "--random-seed", help="Random seed.", default=4321, show_default=True, type=click.INT)
-@click.option("-k", "--k-folds", help="Number of k-folds.", default=5, show_default=True, type=click.INT)
-@click.option("-m", "--model-type", help="What kind of surrogate are you using?", default="GP", show_default=True, type=click.Choice(["GP", "delUQ"]))
-@click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=False, type=click.BOOL, show_default=True)
-def learn(infile, outfile, config_file, bounds, random_seed, k_folds, model_type, multi_fidelity) -> None:
-
+def _learn(infile, outfile, config_file, bounds, random_seed=Defaults.random_seed, k_folds=Defaults.k_folds, model_type=Defaults.model_type, 
+           multi_fidelity=Defaults.multi_fidelity) -> None:
     print(f"""
     Infile: {infile}
     Outfile: {outfile}
@@ -616,50 +638,36 @@ def learn(infile, outfile, config_file, bounds, random_seed, k_folds, model_type
     dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds)
     dc.kfolds = k_folds
     dc.train(model_type=model_type, out_file=outfile)
-
-
+    
 @deepopt_cli.command()
-@click.option("-i", "--infile", help="Training data path.", type=click.Path(exists=True), required=True)
-@click.option("-o", "--outfile", help="Where to place the suggested candidates.", type=click.STRING, required=True)
+@click.option("-i", "--infile", help="Input data to train from.", type=click.Path(exists=True), required=True)
+@click.option("-o", "--outfile", help="Outfile to save model checkpoint.", type=click.STRING, required=True)
 @click.option("-c", "--config-file", help="Config file containing hyper parameters.", type=click.Path(exists=True), required=True)
-@click.option("-l", "--learner-file", help="Learner path. Ex: /learners/my_learner.ckpt", type=click.Path(exists=True), required=True)
-@click.option("-b", "--bounds", help="Bounds for each input dimension.", type=click.STRING, required=True)
-@click.option("-a", "--acq-method", 
-              help="""
-              \b
-              The acquisiton function. 
-              [NOTE: Some acquistion functions only work with a specific fidelity.]
-              \b
-              Single    - [MaxValEntropy|EI|NEI]
-              Multi     - [KG|MaxValEntropy] 
-              """, 
-              type=click.Choice(["EI", "NEI", "KG", "MaxValEntropy"]),
-              required=True)
-@click.option("-r", "--random-seed", help="Random seed.", default=4321, show_default=True, type=click.INT)
-@click.option("-m", "--model-type", help="What kind of surrogate are you using?", show_default=True, type=click.Choice(["GP", "delUQ"]))
-@click.option("-q", "--num-candidates", help="The number of candidates.", default=2, type=click.INT, show_default=True)
-@click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=False, show_default=True, type=click.BOOL)
-@click.option("--risk-measure", help="The risk measure to apply.", type=click.Choice(["VaR", "CVaR"]), cls=ConditionalOption, depends_on="multi_fidelity", equal_to=False)
-@click.option("--risk-level", help="The risk level.", type=click.FloatRange(0, 1, min_open=True), cls=ConditionalOption, depends_on="risk_measure")
-@click.option("--risk-n-deltas", help="The number of input pertubations to sample for X's uncertainty. [example: --risk-n-deltas 10].", type=click.INT, cls=ConditionalOption, depends_on="risk_measure")
-@click.option("--X-stddev", help="Uncertainity in X (stddev) in each dimension. [example: --X-stddev [0.00005]].", type=click.STRING, cls=ConditionalOption, depends_on="risk_measure")
-@click.option("--fidelity-cost", help="List of costs for each fidelity.", type=click.STRING, default='[1,10]', show_default=True, cls=ConditionalOption, depends_on="multi_fidelity", equal_to=True)
-def optimize(
+@click.option("-b","--bounds", help="Bounds for each input dimension.", type=click.STRING, required=True)
+@click.option("-r", "--random-seed", help="Random seed.", default=Defaults.random_seed, show_default=True, type=click.INT)
+@click.option("-k", "--k-folds", help="Number of k-folds.", default=Defaults.k_folds, show_default=True, type=click.INT)
+@click.option("-m", "--model-type", help="What kind of surrogate are you using?", default=Defaults.model_type, show_default=True, type=click.Choice(["GP", "delUQ"]))
+@click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=Defaults.multi_fidelity, type=click.BOOL, show_default=True)
+def learn(infile, outfile, config_file, bounds, random_seed, k_folds, model_type, multi_fidelity) -> None:
+    _learn(infile=infile,outfile=outfile,config_file=config_file,
+           bounds=bounds,random_seed=random_seed,k_folds=k_folds,model_type=model_type,multi_fidelity=multi_fidelity)
+
+def _optimize(
     infile, 
     outfile, 
     config_file,
     learner_file, 
     bounds, 
     acq_method, 
-    random_seed, 
-    model_type, 
-    num_candidates, 
-    multi_fidelity, 
-    risk_measure, 
-    risk_level, 
-    risk_n_deltas, 
-    x_stddev, 
-    fidelity_cost,
+    random_seed=Defaults.random_seed, 
+    model_type=Defaults.model_type, 
+    num_candidates=Defaults.num_candidates, 
+    multi_fidelity=Defaults.multi_fidelity, 
+    risk_measure=None, 
+    risk_level=None, 
+    risk_n_deltas=None, 
+    x_stddev=None, 
+    fidelity_cost=Defaults.fidelity_cost,
     ) -> None:
 
     print(f"""
@@ -682,7 +690,11 @@ def optimize(
     bounds = torch.FloatTensor(json.loads(bounds)).T
     dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds)
     model = dc.load_model(model_type=model_type, learner_file=learner_file)
+    
+    risk_measure = None if risk_measure=="None" else risk_measure
+    
     if risk_measure:
+        assert acq_method!="MaxValEntropy", 'Risk measure not yet supported for MaxValueEntropy acquisition'
         x_stddev = torch.FloatTensor(json.loads(x_stddev)).T
         x_stddev_scaled = x_stddev/(bounds[1]-bounds[0])
         bounds_scaled = torch.FloatTensor(dc.input_dim*[[0,1]]).T
@@ -703,12 +715,62 @@ def optimize(
         acq_method=acq_method, 
         q=num_candidates, 
         risk_objective=risk_objective,
+        risk_n_deltas=risk_n_deltas,
         fidelity_cost=fidelity_cost,
     )
-    candidates = candidates*(bounds[1]-bounds[0]) + bounds[0]
+    if dc.multi_fidelity:
+        candidates[:,:-1] = candidates[:,:-1]*(bounds[1,:-1]-bounds[0,:-1] + bounds[0,:-1])
+        candidates[:,-1] = candidates[:,-1].round()
+    else:
+        candidates = candidates*(bounds[1]-bounds[0]) + bounds[0]
     candidates_npy = candidates.cpu().detach().numpy()
     np.save(outfile, candidates_npy)
 
+@deepopt_cli.command()
+@click.option("-i", "--infile", help="Training data path.", type=click.Path(exists=True), required=True)
+@click.option("-o", "--outfile", help="Where to place the suggested candidates.", type=click.STRING, required=True)
+@click.option("-c", "--config-file", help="Config file containing hyper parameters.", type=click.Path(exists=True), required=True)
+@click.option("-l", "--learner-file", help="Learner path. Ex: /learners/my_learner.ckpt", type=click.Path(exists=True), required=True)
+@click.option("-b", "--bounds", help="Bounds for each input dimension.", type=click.STRING, required=True)
+@click.option("-a", "--acq-method", 
+              help="""
+              \b
+              The acquisiton function. 
+              [NOTE: Some acquistion functions only work with a specific fidelity.]
+              \b
+              Single    - [KG|MaxValEntropy|EI|NEI]
+              Multi     - [KG|MaxValEntropy] 
+              """, 
+              type=click.Choice(["EI", "NEI", "KG", "MaxValEntropy"]), required=True)
+@click.option("-r", "--random-seed", help="Random seed.", default=4321, show_default=True, type=click.INT)
+@click.option("-m", "--model-type", help="What kind of surrogate are you using?", show_default=True, type=click.Choice(["GP", "delUQ"]))
+@click.option("-q", "--num-candidates", help="The number of candidates.", default=2, type=click.INT, show_default=True)
+@click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=False, show_default=True, type=click.BOOL)
+@click.option("--risk-measure", help="The risk measure to apply.", type=click.Choice(["VaR", "CVaR"]))
+@click.option("--risk-level", help="The risk level.", type=click.FloatRange(0, 1, min_open=True), cls=ConditionalOption, depends_on="risk_measure")
+@click.option("--risk-n-deltas", help="The number of input pertubations to sample for X's uncertainty. [example: --risk-n-deltas 10].", type=click.INT, cls=ConditionalOption, depends_on="risk_measure")
+@click.option("--X-stddev", help="Uncertainity in X (stddev) in each dimension. [example: --X-stddev [0.00005]].", type=click.STRING, cls=ConditionalOption, depends_on="risk_measure")
+@click.option("--fidelity-cost", help="List of costs for each fidelity.", type=click.STRING, default='[1,10]', show_default=True, cls=ConditionalOption, depends_on="multi_fidelity", equal_to=True)
+def optimize(
+    infile, 
+    outfile, 
+    config_file,
+    learner_file, 
+    bounds, 
+    acq_method, 
+    random_seed, 
+    model_type, 
+    num_candidates, 
+    multi_fidelity, 
+    risk_measure, 
+    risk_level, 
+    risk_n_deltas, 
+    x_stddev, 
+    fidelity_cost,
+    ) -> None:
+    _optimize(infile=infile,outfile=outfile,config_file=config_file,learner_file=learner_file,
+              bounds=bounds,acq_method=acq_method,random_seed=random_seed,model_type=model_type,num_candidates=num_candidates,multi_fidelity=multi_fidelity,
+              risk_measure=risk_measure,risk_level=risk_level,risk_n_deltas=risk_n_deltas,x_stddev=x_stddev,fidelity_cost=fidelity_cost)
 
 def main():
     deepopt_cli(max_content_width=800)

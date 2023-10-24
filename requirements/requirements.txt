@@ -8,8 +8,7 @@ botorch==0.6.6
 plotly
 kaleido
 ray[tune]
-scipy[optimize]
-scipy[stats]
+scipy
 click
 pyyaml
 psutil
