@@ -26,6 +26,46 @@ class BaseModel(Model):
             for i in range(covar_diag.shape[-1]):
                 covars[...,i,i] = covar_diag[...,i]
             mvn = MultivariateNormal(means.squeeze(-1),covars)
+
+        # elif means.ndim == 3:
+        #     assert means.size(-1) == variances.size(-1) == 1
+        #     try:
+        #         mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
+        #     except RuntimeError:
+        #         print('RuntimeError')
+        #         print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+        #     else:
+        #         mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
+                
+        # elif means.ndim > 3:
+        #     assert means.size(-1) == variances.size(-1) == 1
+        #     try:
+        #         covar_diag = variances.squeeze(-1) + 1e-6
+        #         covars = torch.zeros(*covar_diag.shape,covar_diag.shape[-1])
+        #         for i in range(covar_diag.shape[-1]):
+        #             covars[...,i,i] = covar_diag[...,i]
+        #         mvn = MultivariateNormal(means.squeeze(-1),covars)
+        #     except RuntimeError:
+        #         print('RuntimeError')
+        #         print(covar_diag)
+        #     else:
+        #         mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
+
+        # else:
+        #     raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
+
+            
+#        elif means.ndim == 3:
+#            assert means.size(-1) == variances.size(-1) == 1
+#            try:
+#                mvn = MultivariateNormal(means.squeeze(-1), torch.diag_embed(variances.squeeze(-1) + 1e-6))
+#            except RuntimeError:
+#                print('RuntimeError')
+#                print(torch.diag_embed(variances.squeeze(-1)) + 1e-6)
+#
+#        else:
+#            raise NotImplementedError("Something is wrong, just cmd+f this error message and you can start debugging.")
+
         return mvn
 
     @property
@@ -43,15 +83,18 @@ class BaseModel(Model):
             return preds[0].view(X.size(0), X.size(1), X.size(2), 1), preds[1].view(X.size(0), X.size(1), X.size(2), 1)
 
 
-    def posterior(self, X, **kwargs):
+    def posterior(self, X, posterior_transform=None, observation_noise=False,**kwargs):
         # Transformations are applied at evaluation time.
         # An acquisiton's objective funtion will call
         # the model's posterior.
         X = self.transform_inputs(X)
         mvn = self.forward(X, **kwargs)
-        return GPyTorchPosterior(mvn)
+        if posterior_transform:
+            return posterior_transform(GPyTorchPosterior(mvn))
+        else:
+            return GPyTorchPosterior(mvn)
 
-    def forward(self, X, posterior_transform=None, observation_noise=False, **kwargs):
+    def forward(self, X, **kwargs):
         use_variances = kwargs.get('use_variances')
         if any([use_variances is None,use_variances is False]):
             means, covs = self.get_prediction_with_uncertainty(X,get_cov=True,original_scale=False,**kwargs)
