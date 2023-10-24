@@ -1,0 +1,11 @@
+**/.ipynb_checkpoints
+**/.DS_Store
+**/__pycache__
+*deepopt.egg-info
+**/throwaway
+**/deepopt_venv
+*.rdb
+*build/
+**/*.out
+**/*.ckpt
+*.ipynb
