@@ -3,12 +3,11 @@ tqdm
 scikit-learn
 torch
 torchvision
-gpytorch
-botorch
+gpytorch==1.8.1
+botorch==0.6.6
 plotly
 kaleido
 ray[tune]
-scipy
 scipy[optimize]
 scipy[stats]
 click
