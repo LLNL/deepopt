@@ -215,6 +215,7 @@ class DeepoptConfigure:
             model.eval()
             with torch.no_grad():
                 for _, (X_test, y_test) in enumerate(test_loader):
+                    #TODO: double-check whether this is the correct way to evaluate the model and whether simplified methods already exist in DeltaEnc class
                     y_pred = []
                     h = net.input_mapping(X_test)
                     for i in range(len(X_test)):
@@ -532,6 +533,7 @@ class DeepoptConfigure:
             q_acq = qExpectedImprovement(model, self.full_train_Y.max().item(), objective=risk_objective)
         elif acq_method == "NEI":
             q_acq = qNoisyExpectedImprovement(model, self.full_train_X, objective=risk_objective, prune_baseline=True)
+            #TODO: Verify call syntax for qNoisyExpectedImprovement (why does it need inputs?)
         elif acq_method == "MaxValEntropy":
             n_candidates = 1000
             candidate_set = torch.rand(n_candidates, self.input_dim)
@@ -638,6 +640,8 @@ def _learn(infile, outfile, config_file, bounds, random_seed=Defaults.random_see
     dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds)
     dc.kfolds = k_folds
     dc.train(model_type=model_type, out_file=outfile)
+    #TODO: Consider renaming dc.train to dc.fit since .train() in pytorch does not train model, but only sets it to be "trainable"
+
     
 @deepopt_cli.command()
 @click.option("-i", "--infile", help="Input data to train from.", type=click.Path(exists=True), required=True)
