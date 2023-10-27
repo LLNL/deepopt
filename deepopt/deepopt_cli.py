@@ -105,20 +105,18 @@ class DeepoptConfigure:
 
     config_file: str
     data_file: str
-    random_seed: int
+    random_seed: int = Defaults.random_seed
     bounds: ndarray
-    multi_fidelity: bool
+    multi_fidelity: bool = Defaults.multi_fidelity
     num_fidelities: int = None
-    kfolds: int = None
+    kfolds: int = Defaults.kfolds
     full_train_X: ndarray = None
     full_train_Y: ndarray = None
     input_dim: int = None
     output_dim: int = None
     config: Dict[str, Any] = None
-    device: str = None
-    surrogate_type: str = None
-    encoding: str = None
-    target: str = None
+    device: str = 'cpu'
+    target: str = 'dy'
     target_fidelities: Dict[int, float] = None
 
     def __post_init__(self) -> None:
@@ -134,7 +132,10 @@ class DeepoptConfigure:
             self.num_fidelities = int(self.bounds[1,-1]) + 1
         else:
             self.num_fidelities = 1
-        self.full_train_Y = self.Y_orig.clone()
+            
+        self.full_train_X = self.full_train_X.to(self.device)
+        self.full_train_Y = self.Y_orig.clone().to(self.device)
+        
         self.input_dim = self.full_train_X.size(-1)
         self.output_dim = self.full_train_Y.shape[-1]
         assert self.output_dim==1, "Multi-output models not currently supported."
@@ -145,11 +146,11 @@ class DeepoptConfigure:
                 self.config = yaml.safe_load(file)
             else:
                 self.config = json.load(file)
-            self.device = self.config.get("device", "cpu")
-            self.surrogate_type = self.config.get("surrogate_type", "FF")
-            self.encoding = self.config.get("encoding", "default")
-            self.target = self.config.get("target", "dy")
             # TODO: when running single fidelity with deluq, should n_epochs be set to 1000?
+        manual_seed(self.random_seed)
+        np.random.seed(self.random_seed)
+        random.seed(self.random_seed)
+        
 
     def _delta_enc(self, q, a, y_q):  # a is the anchor and q is the query
         residual = q - a
@@ -183,8 +184,11 @@ class DeepoptConfigure:
         random.seed(seed)
         
         dataset = TensorDataset(self.full_train_X, self.full_train_Y)
-
-        kfold = KFold(n_splits=self.kfolds, shuffle=True)
+        
+        if self.kfolds>len(self.full_train_X):
+            kfold = KFold(n_splits=len(self.full_train_X), shuffle=True)
+        else:
+            kfold = KFold(n_splits=self.kfolds, shuffle=True)
 
         cv_loss_fun = torch.nn.MSELoss()
         cv_score = 0
@@ -199,39 +203,31 @@ class DeepoptConfigure:
                                     batch_size=len(test_ids),
                                     sampler=test_subsampler)
 
-            net = Arch(self.config, 'deltaenc', self.input_dim, self.output_dim).to(self.device)
+            net = Arch(config=self.config, unc_type='deltaenc', input_dim=self.input_dim, output_dim=self.output_dim, device=self.device)
             opt = create_optimizer(net, self.config)
 
             for _, (X_train, y_train) in enumerate(train_loader):
                 if self.multi_fidelity:
-                    model = DeltaEncMF(net, self.config, opt, X_train, y_train,
-                                    self.surrogate_type, 'default', 'dy', self.device)
+                    model = DeltaEncMF(network=net, config=self.config, optimizer=opt, 
+                                       X_train=X_train, y_train=y_train, target=self.target)
                 else:
-                    model = DeltaEnc(net, self.config, opt, X_train, y_train,
-                                    self.surrogate_type, 'default', 'dy', self.device)
+                    model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
+                                     X_train=X_train, y_train=y_train, target=self.target)
                 model.train()
                 model.fit()
 
             model.eval()
-            with torch.no_grad():
+            with torch.no_grad(): #TODO: is this needed?
                 for _, (X_test, y_test) in enumerate(test_loader):
-                    #TODO: double-check whether this is the correct way to evaluate the model and whether simplified methods already exist in DeltaEnc class
-                    y_pred = []
-                    h = net.input_mapping(X_test)
-                    for i in range(len(X_test)):
-                        x_denc = []
-                        # using the entire possible xi xj matchings
-                        for j in range(len(X_test)):
-                            xd, _ = self._delta_enc(
-                                h[j].unsqueeze(0), h[i].unsqueeze(0), 0)
-                            x_denc.append(xd)
-
-                        x_denc = torch.cat(x_denc)
-                        y_denc = net(x_denc).detach().ravel()
-                        y_pred.append(torch.mean(y_denc))
-
-                    y_pred = torch.stack(y_pred).view(-1, 1)
-                    cv_score += cv_loss_fun(y_test, y_pred)
+                    if self.multi_fidelity:
+                        test_fid_locs = [X_test[...,-1]==i for i in model.X_train[...,-1].unique()]
+                        y_test_scaled = y_test.clone()
+                        for fid_loc,y_min,y_max in zip(test_fid_locs,model.y_min,model.y_max):
+                            y_test_scaled[fid_loc] = model.out_scaler(y_test_scaled[fid_loc],y_min,y_max)
+                    else:
+                        y_test_scaled = model.out_scaler(y_test,model.y_min,model.y_max)
+                    y_pred,_ = model.get_prediction_with_uncertainty(X_test,original_scale=False)
+                    cv_score += cv_loss_fun(y_test_scaled, y_pred)
 
         return {"score": cv_score.item()}
 
@@ -316,19 +312,15 @@ class DeepoptConfigure:
             print(f"{key} {val}")
             if key in self.config:
                 self.config[key] = val
-        net = Arch(self.config, 'deltaenc', self.input_dim, self.output_dim).to(self.device)
+        net = Arch(config=self.config, unc_type='deltaenc', input_dim=self.input_dim, output_dim=self.output_dim, device=self.device)
         opt = create_optimizer(net, self.config)
         
         if self.multi_fidelity:
-            model = DeltaEncMF(
-                net, self.config, opt, self.full_train_X, self.full_train_Y,
-                self.surrogate_type, 'default', 'dy', self.device
-                )
+            model = DeltaEncMF(network=net, config=self.config, optimizer=opt, 
+                               X_train=X_train, y_train=y_train, target=self.target)
         else:
-            model = DeltaEnc(
-                net, self.config, opt, self.full_train_X, self.full_train_Y,
-                self.surrogate_type, 'default', 'dy', self.device
-                )
+            model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
+                             X_train=X_train, y_train=y_train, target=self.target)
 
         model.fit()
         if basename(out_file).split('.')[-1]=='ckpt':
@@ -377,25 +369,15 @@ class DeepoptConfigure:
         from deepopt.surrogate_utils import create_optimizer
         from deepopt.deltaenc import DeltaEnc, DeltaEncMF
     
-        model = Arch(self.config, 'deltaenc', self.input_dim, self.output_dim).to(self.device)
-        opt = create_optimizer(model, self.config)
-
-        kwargs = SimpleNamespace(
-            network=model,
-            config=self.config,
-            optimizer=opt,
-            X_train=self.full_train_X,
-            y_train=self.full_train_Y,
-            surrogate_type=self.surrogate_type,
-            encoding=self.encoding,
-            target=self.target,
-            device=self.device,
-        )
+        net = Arch(config=self.config, unc_type='deltaenc', input_dim=self.input_dim, out_dim=self.output_dim, device=self.device)
+        opt = create_optimizer(net, self.config)
 
         if self.multi_fidelity:
-            model = DeltaEncMF(**kwargs.__dict__)
+            model = DeltaEncMF(network=net, config=self.config, optimizer=opt, 
+                               X_train=X_train, y_train=y_train, target=self.target)
         else:
-            model = DeltaEnc(**kwargs.__dict__)
+            model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
+                             X_train=X_train, y_train=y_train, target=self.target)
 
         # DeltaEnc model requries the parent path and file name to be separated.
         # Extension of file is also removed and assumed to be ".ckpt".
@@ -609,7 +591,66 @@ class DeepoptConfigure:
         assert (len(X_stddev) == len(bounds.T)), f"Expected {len(bounds.T)} values for X_stddev but recieved {len(X_stddev)}."
         input_pertubation = InputPerturbation(perturbation_set=self._multiv_normal_samples(risk_n_deltas, X_stddev), bounds=bounds).eval()
         return input_pertubation
-
+    
+    def learn(outfile, model_type=Defaults.model_type) -> None:
+        print(f"""
+        Infile: {self.data_file}
+        Outfile: {outfile}
+        Config File: {self.config_file}
+        Random Seed: {self.random_seed}
+        K-Folds: {self.k_folds}
+        Bounds: {self.bounds}
+        Model Type: {model_type}
+        Multi-Fidelity: {self.multi_fidelity}
+        """)
+        self.train(model_type=model_type,out_file=outfile)
+        
+    def optimize(outfile,learner_file,acq_method,model_type=Defaults.model_type,
+                 num_candidates=Defaults.num_candidates,fidelity_cost=Defaults.fidelity_cost,
+                 risk_measure=None,risk_level=None,risk_n_deltas=None,x_stddev=None) -> None:
+        print(f"""
+        Infile: {self.data_file}
+        Outfile: {outfile}
+        Config File: {self.config_file}
+        Learner File: {learner_file}
+        Random Seed: {self.random_seed}
+        Bounds: {self.bounds}
+        Acq Method: {acq_method}
+        Model Type: {model_type}
+        Multi-Fidelity: {self.multi_fidelity}
+        Fidelity Cost: {fidelity_cost}
+        """)
+        
+        model = self.load_model(model_type=model_type,learner_file=learner_file)
+                
+        if risk_measure:
+            assert acq_method!="MaxValEntropy", 'Risk measure not yet supported for MaxValueEntropy acquisition'
+            x_stddev_scaled = x_stddev/(bounds[1]-bounds[0])
+            bounds_scaled = torch.FloatTensor(self.input_dim*[[0,1]]).T
+            if self.multi_fidelity:
+                x_stddev_scaled[-1] = 0
+            risk_objective = self.get_risk_measure_objective(risk_measure=risk_measure, alpha=risk_level, n_w=risk_n_deltas)
+            input_pertubation = self.get_input_pertubation(risk_n_deltas=risk_n_deltas, bounds=bounds_scaled, X_stddev=x_stddev_scaled)
+            model.input_transform = input_pertubation
+        else:
+            risk_objective = None
+        model.eval()
+        
+        candidates, _ = self.get_candidates(
+            model=model, 
+            acq_method=acq_method, 
+            q=num_candidates, 
+            risk_objective=risk_objective,
+            risk_n_deltas=risk_n_deltas,
+            fidelity_cost=fidelity_cost,
+        )
+        if self.multi_fidelity:
+            candidates[:,:-1] = candidates[:,:-1]*(self.bounds[1,:-1]-self.bounds[0,:-1] + self.bounds[0,:-1])
+            candidates[:,-1] = candidates[:,-1].round()
+        else:
+            candidates = candidates*(self.bounds[1]-self.bounds[0]) + self.bounds[0]
+        candidates_npy = candidates.cpu().detach().numpy()
+        np.save(outfile, candidates_npy)
 
 @click.group()
 @click.option("--develop", help="If developing package, pass in path to your development repo. [example: --develop /usr/workspace/tran67/deepopt]", type=click.Path(exists=True))
@@ -619,29 +660,6 @@ def deepopt_cli(develop):
         DEEPOPT_PATH = develop
         DEVELOP = True
         set_deepopt_path()
-
-def _learn(infile, outfile, config_file, bounds, random_seed=Defaults.random_seed, k_folds=Defaults.k_folds, model_type=Defaults.model_type, 
-           multi_fidelity=Defaults.multi_fidelity) -> None:
-    print(f"""
-    Infile: {infile}
-    Outfile: {outfile}
-    Config File: {config_file}
-    Random Seed: {random_seed}
-    K-Folds: {k_folds}
-    Bounds: {bounds}
-    Model Type: {model_type}
-    Multi-Fidelity: {multi_fidelity}
-    """)
-    manual_seed(random_seed)
-    np.random.seed(random_seed)
-    random.seed(random_seed)
-    
-    bounds = torch.FloatTensor(json.loads(bounds)).T
-    dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds)
-    dc.kfolds = k_folds
-    dc.train(model_type=model_type, out_file=outfile)
-    #TODO: Consider renaming dc.train to dc.fit since .train() in pytorch does not train model, but only sets it to be "trainable"
-
     
 @deepopt_cli.command()
 @click.option("-i", "--infile", help="Input data to train from.", type=click.Path(exists=True), required=True)
@@ -653,82 +671,10 @@ def _learn(infile, outfile, config_file, bounds, random_seed=Defaults.random_see
 @click.option("-m", "--model-type", help="What kind of surrogate are you using?", default=Defaults.model_type, show_default=True, type=click.Choice(["GP", "delUQ"]))
 @click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=Defaults.multi_fidelity, type=click.BOOL, show_default=True)
 def learn(infile, outfile, config_file, bounds, random_seed, k_folds, model_type, multi_fidelity) -> None:
-    _learn(infile=infile,outfile=outfile,config_file=config_file,
-           bounds=bounds,random_seed=random_seed,k_folds=k_folds,model_type=model_type,multi_fidelity=multi_fidelity)
-
-def _optimize(
-    infile, 
-    outfile, 
-    config_file,
-    learner_file, 
-    bounds, 
-    acq_method, 
-    random_seed=Defaults.random_seed, 
-    model_type=Defaults.model_type, 
-    num_candidates=Defaults.num_candidates, 
-    multi_fidelity=Defaults.multi_fidelity, 
-    risk_measure=None, 
-    risk_level=None, 
-    risk_n_deltas=None, 
-    x_stddev=None, 
-    fidelity_cost=Defaults.fidelity_cost,
-    ) -> None:
-
-    print(f"""
-    Infile: {infile}
-    Outfile: {outfile}
-    Config File: {config_file}
-    Learner File: {learner_file}
-    Bounds: {bounds}
-    Acq Method: {acq_method}
-    Random Seed: {random_seed}
-    Model Type: {model_type}
-    Multi-Fidelity: {multi_fidelity}
-    Fidelity Cost: {fidelity_cost}
-    """)
-
-    manual_seed(random_seed)
-    np.random.seed(random_seed)
-    random.seed(random_seed)
-
     bounds = torch.FloatTensor(json.loads(bounds)).T
-    dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds)
-    model = dc.load_model(model_type=model_type, learner_file=learner_file)
-    
-    risk_measure = None if risk_measure=="None" else risk_measure
-    
-    if risk_measure:
-        assert acq_method!="MaxValEntropy", 'Risk measure not yet supported for MaxValueEntropy acquisition'
-        x_stddev = torch.FloatTensor(json.loads(x_stddev)).T
-        x_stddev_scaled = x_stddev/(bounds[1]-bounds[0])
-        bounds_scaled = torch.FloatTensor(dc.input_dim*[[0,1]]).T
-        if dc.multi_fidelity:
-            x_stddev_scaled[-1] = 0
-        risk_objective = dc.get_risk_measure_objective(risk_measure=risk_measure, alpha=risk_level, n_w=risk_n_deltas)
-        input_pertubation = dc.get_input_pertubation(risk_n_deltas=risk_n_deltas, bounds=bounds_scaled, X_stddev=x_stddev_scaled)
-        model.input_transform = input_pertubation
-    else:
-        risk_objective = None
-    model.eval()
-    
-    if dc.multi_fidelity:
-        fidelity_cost = torch.FloatTensor(json.loads(fidelity_cost))
+    dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds,kfolds=k_folds)
+    dc.learn(outfile=outfile,model_type=model_type)
 
-    candidates, _ = dc.get_candidates(
-        model=model, 
-        acq_method=acq_method, 
-        q=num_candidates, 
-        risk_objective=risk_objective,
-        risk_n_deltas=risk_n_deltas,
-        fidelity_cost=fidelity_cost,
-    )
-    if dc.multi_fidelity:
-        candidates[:,:-1] = candidates[:,:-1]*(bounds[1,:-1]-bounds[0,:-1] + bounds[0,:-1])
-        candidates[:,-1] = candidates[:,-1].round()
-    else:
-        candidates = candidates*(bounds[1]-bounds[0]) + bounds[0]
-    candidates_npy = candidates.cpu().detach().numpy()
-    np.save(outfile, candidates_npy)
 
 @deepopt_cli.command()
 @click.option("-i", "--infile", help="Training data path.", type=click.Path(exists=True), required=True)
@@ -772,9 +718,17 @@ def optimize(
     x_stddev, 
     fidelity_cost,
     ) -> None:
-    _optimize(infile=infile,outfile=outfile,config_file=config_file,learner_file=learner_file,
-              bounds=bounds,acq_method=acq_method,random_seed=random_seed,model_type=model_type,num_candidates=num_candidates,multi_fidelity=multi_fidelity,
-              risk_measure=risk_measure,risk_level=risk_level,risk_n_deltas=risk_n_deltas,x_stddev=x_stddev,fidelity_cost=fidelity_cost)
+    bounds = torch.FloatTensor(json.loads(bounds)).T
+    dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds)
+    
+    risk_measure = None if risk_measure=='None' else risk_measure
+    if risk_measure:
+        x_stddev = torch.FloatTensor(json.loads(x_stddev)).T
+    if multi_fidelity:
+        fidelity_cost = torch.FloatTensor(json.loads(fidelity_cost))
+    dc.optimize(outfile=outfile,learner_file=learner_file,acq_method=acq_method,model_type=model_type,
+                num_candidates=num_candidates,fidelity_cost=fidelity_cost,
+                risk_measure=risk_measure,risk_level=risk_level,risk_n_deltas=risk_n_deltas,x_stddev=x_stddev)
 
 def main():
     deepopt_cli(max_content_width=800)

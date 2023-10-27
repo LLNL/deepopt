@@ -50,6 +50,7 @@ class MLP(nn.Module):
         super(MLP, self).__init__()
         self.config = config
         self.unc_type = unc_type
+        self.device = device
 
         if self.config['ff']:
             scale = np.sqrt(self.config['variance'])#/(input_dim-1)
@@ -78,22 +79,21 @@ class MLP(nn.Module):
             layers.append(MLPLayer(self.config['activation'], self.config['hidden_dim'], self.config['hidden_dim'], do=self.config['dropout'], dop=self.config['dropout_prob'], bn=self.config['batchnorm'], is_first=False, is_last=False))
         layers.append(MLPLayer('identity', self.config['hidden_dim'], output_dim, do=False, dop=0.0, bn=False, is_first=False, is_last=True))
 
-        self.mlp = nn.Sequential(*layers)
+        self.mlp = nn.Sequential(*layers).to(device)
 
     def input_mapping(self,x):
         if self.B is None:
-            return x
+            return x.to(self.device)
         else:
-            x_proj = (2. * np.pi * x).float() @ self.B.t() #torch.matmul(2. * np.pi * x, self.B.t())#
+            x_proj = (2. * np.pi * x).float().to(self.device) @ self.B.t() 
             return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
     def forward(self,x):
         if self.unc_type == 'deltaenc':
-            out = self.mlp(x)
+            out = self.mlp(x.to(self.device))
         else:
-            h = self.input_mapping(x)
+            h = self.input_mapping(x.to(self.device))
             out = self.mlp(h)
-        #print(self.mlp[8].linear.weight)
         return out
 
 class SirenLayer(nn.Module):
