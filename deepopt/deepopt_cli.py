@@ -105,11 +105,11 @@ class DeepoptConfigure:
 
     config_file: str
     data_file: str
-    random_seed: int = Defaults.random_seed
     bounds: ndarray
+    random_seed: int = Defaults.random_seed
     multi_fidelity: bool = Defaults.multi_fidelity
     num_fidelities: int = None
-    kfolds: int = Defaults.kfolds
+    k_folds: int = Defaults.k_folds
     full_train_X: ndarray = None
     full_train_Y: ndarray = None
     input_dim: int = None
@@ -185,10 +185,10 @@ class DeepoptConfigure:
         
         dataset = TensorDataset(self.full_train_X, self.full_train_Y)
         
-        if self.kfolds>len(self.full_train_X):
+        if self.k_folds>len(self.full_train_X):
             kfold = KFold(n_splits=len(self.full_train_X), shuffle=True)
         else:
-            kfold = KFold(n_splits=self.kfolds, shuffle=True)
+            kfold = KFold(n_splits=self.k_folds, shuffle=True)
 
         cv_loss_fun = torch.nn.MSELoss()
         cv_score = 0
@@ -672,7 +672,7 @@ def deepopt_cli(develop):
 @click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=Defaults.multi_fidelity, type=click.BOOL, show_default=True)
 def learn(infile, outfile, config_file, bounds, random_seed, k_folds, model_type, multi_fidelity) -> None:
     bounds = torch.FloatTensor(json.loads(bounds)).T
-    dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds,kfolds=k_folds)
+    dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds,k_folds=k_folds)
     dc.learn(outfile=outfile,model_type=model_type)
 
 
