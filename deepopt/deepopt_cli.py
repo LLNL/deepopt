@@ -598,7 +598,7 @@ class DeepoptConfigure:
         Outfile: {outfile}
         Config File: {self.config_file}
         Random Seed: {self.random_seed}
-        K-Folds: {self.kfolds}
+        K-Folds: {self.k_folds}
         Bounds: {self.bounds}
         Model Type: {model_type}
         Multi-Fidelity: {self.multi_fidelity}
