@@ -105,11 +105,11 @@ class DeepoptConfigure:
 
     config_file: str
     data_file: str
-    random_seed: int = Defaults.random_seed
     bounds: ndarray
+    random_seed: int = Defaults.random_seed
     multi_fidelity: bool = Defaults.multi_fidelity
     num_fidelities: int = None
-    kfolds: int = Defaults.kfolds
+    kfolds: int = Defaults.k_folds
     full_train_X: ndarray = None
     full_train_Y: ndarray = None
     input_dim: int = None
@@ -317,10 +317,10 @@ class DeepoptConfigure:
         
         if self.multi_fidelity:
             model = DeltaEncMF(network=net, config=self.config, optimizer=opt, 
-                               X_train=X_train, y_train=y_train, target=self.target)
+                               X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target)
         else:
             model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
-                             X_train=X_train, y_train=y_train, target=self.target)
+                             X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target)
 
         model.fit()
         if basename(out_file).split('.')[-1]=='ckpt':
@@ -369,15 +369,15 @@ class DeepoptConfigure:
         from deepopt.surrogate_utils import create_optimizer
         from deepopt.deltaenc import DeltaEnc, DeltaEncMF
     
-        net = Arch(config=self.config, unc_type='deltaenc', input_dim=self.input_dim, out_dim=self.output_dim, device=self.device)
+        net = Arch(config=self.config, unc_type='deltaenc', input_dim=self.input_dim, output_dim=self.output_dim, device=self.device)
         opt = create_optimizer(net, self.config)
 
         if self.multi_fidelity:
             model = DeltaEncMF(network=net, config=self.config, optimizer=opt, 
-                               X_train=X_train, y_train=y_train, target=self.target)
+                               X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target)
         else:
             model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
-                             X_train=X_train, y_train=y_train, target=self.target)
+                             X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target)
 
         # DeltaEnc model requries the parent path and file name to be separated.
         # Extension of file is also removed and assumed to be ".ckpt".
@@ -592,20 +592,20 @@ class DeepoptConfigure:
         input_pertubation = InputPerturbation(perturbation_set=self._multiv_normal_samples(risk_n_deltas, X_stddev), bounds=bounds).eval()
         return input_pertubation
     
-    def learn(outfile, model_type=Defaults.model_type) -> None:
+    def learn(self,outfile, model_type=Defaults.model_type) -> None:
         print(f"""
         Infile: {self.data_file}
         Outfile: {outfile}
         Config File: {self.config_file}
         Random Seed: {self.random_seed}
-        K-Folds: {self.k_folds}
+        K-Folds: {self.kfolds}
         Bounds: {self.bounds}
         Model Type: {model_type}
         Multi-Fidelity: {self.multi_fidelity}
         """)
         self.train(model_type=model_type,out_file=outfile)
         
-    def optimize(outfile,learner_file,acq_method,model_type=Defaults.model_type,
+    def optimize(self,outfile,learner_file,acq_method,model_type=Defaults.model_type,
                  num_candidates=Defaults.num_candidates,fidelity_cost=Defaults.fidelity_cost,
                  risk_measure=None,risk_level=None,risk_n_deltas=None,x_stddev=None) -> None:
         print(f"""
@@ -625,7 +625,7 @@ class DeepoptConfigure:
                 
         if risk_measure:
             assert acq_method!="MaxValEntropy", 'Risk measure not yet supported for MaxValueEntropy acquisition'
-            x_stddev_scaled = x_stddev/(bounds[1]-bounds[0])
+            x_stddev_scaled = x_stddev/(self.bounds[1]-self.bounds[0])
             bounds_scaled = torch.FloatTensor(self.input_dim*[[0,1]]).T
             if self.multi_fidelity:
                 x_stddev_scaled[-1] = 0
@@ -723,7 +723,7 @@ def optimize(
     
     risk_measure = None if risk_measure=='None' else risk_measure
     if risk_measure:
-        x_stddev = torch.FloatTensor(json.loads(x_stddev)).T
+        x_stddev = torch.FloatTensor(json.loads(x_stddev))
     if multi_fidelity:
         fidelity_cost = torch.FloatTensor(json.loads(fidelity_cost))
     dc.optimize(outfile=outfile,learner_file=learner_file,acq_method=acq_method,model_type=model_type,

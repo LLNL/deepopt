@@ -65,15 +65,15 @@ class MLP(nn.Module):
                 self.B = torch.from_numpy(rp).float()
             self.B = self.B.to(device)
             if self.unc_type == 'deltaenc':
-                input_dim = self.config['mapping_size']*4
+                first_layer_dim = self.config['mapping_size']*4
             else:
-                input_dim = self.config['mapping_size']*2
+                first_layer_dim = self.config['mapping_size']*2
         else:
             self.B = None
             if self.unc_type == 'deltaenc':
-                input_dim*=2
+                first_layer_dim = 2*input_dim
                 
-        layers = [MLPLayer(self.config['activation'], input_dim, self.config['hidden_dim'], do=False, dop=0.0, bn=False, is_first=True, is_last=False)]
+        layers = [MLPLayer(self.config['activation'], first_layer_dim, self.config['hidden_dim'], do=False, dop=0.0, bn=False, is_first=True, is_last=False)]
 
         for i in range(1, self.config['n_layers'] - 1):
             layers.append(MLPLayer(self.config['activation'], self.config['hidden_dim'], self.config['hidden_dim'], do=self.config['dropout'], dop=self.config['dropout_prob'], bn=self.config['batchnorm'], is_first=False, is_last=False))
