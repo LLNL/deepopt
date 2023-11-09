@@ -432,7 +432,7 @@ class DeltaEnc(Model):
     def fantasize(self,
         X: torch.Tensor,
         sampler: Type[MCSampler],
-        # observation_noise: bool = True,  # TODO uncomment this if we implement it in BaseModel
+        # observation_noise: bool = True,  # TODO uncomment this if we implement it
         **kwargs
     ) -> "DeltaEnc":
         """
@@ -445,7 +445,7 @@ class DeltaEnc(Model):
         """
         propagate_grads = kwargs.pop('propagate_grads',False)
         with settings.propagate_grads(propagate_grads):
-            # post_X = self.posterior(X,observation_noise=observation_noise,**kwargs)  # TODO uncomment this if we implement observation_noise in BaseModel
+            # post_X = self.posterior(X,observation_noise=observation_noise,**kwargs)  # TODO uncomment this if we implement observation_noise
             post_X = self.posterior(X, **kwargs)
             Y_fantasized = sampler(post_X)
                     
