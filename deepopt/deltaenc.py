@@ -15,7 +15,7 @@ from deepopt.base import BaseModel
 
 # from botorch.models.utils import fantasize as fantasize_flag
 from botorch import settings
-from botorch.sampling.base import MCSampler
+from botorch.sampling.samplers import MCSampler
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
 from gpytorch.distributions import MultivariateNormal
@@ -286,9 +286,10 @@ class DeltaEnc(Model):
 
     def get_prediction_with_uncertainty(
         self,
-        q: torch.Tensory,
+        q: torch.Tensor,
         get_cov: bool = False,
-        original_scale: bool = True
+        original_scale: bool = True,
+        **kwargs: Any
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Given a tensor calculate the prediction with uncertainty.
@@ -360,7 +361,7 @@ class DeltaEnc(Model):
         sampler: Type[MCSampler],
         # observation_noise: bool = True,  # TODO uncomment this if we implement it in BaseModel
         **kwargs
-    ) -> DeltaEnc:
+    ) -> "DeltaEnc":
         """
         Augment the dataset and return a new model with the fantasized points.
 
@@ -624,7 +625,7 @@ class DeltaEncMF(BaseModel):
 
         return pred
 
-    def get_prediction_with_uncertainty(self, q,get_cov=False,original_scale=True):
+    def get_prediction_with_uncertainty(self, q, get_cov=False, original_scale=True, **kwargs: Any):
         orig_input_shape = q.shape
         assert q.shape[-1]==self.input_dim, 'Expected tensor to have size=input_dim ({}) in last dimension, found tensor of shape {}'.format(self.input_dim,q.shape)        
         if q.shape[-len(self.batch_shape)-2:-2]!=self.batch_shape:

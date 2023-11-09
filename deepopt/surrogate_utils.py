@@ -9,7 +9,7 @@ import torch.nn.functional as F
 import torchvision.models as models
 
 from collections import OrderedDict
-from typing import Any, Dict, Type
+from typing import Any, Dict, Type, Union
 from math import pi
 from math import cos
 from torch.optim import Adam, SGD
