@@ -284,7 +284,7 @@ class DeepoptConfigure:
         set_deepopt_path()
         from deepopt.surrogate_utils import MLP as Arch
         from deepopt.surrogate_utils import create_optimizer
-        from deepopt.deltaenc import DeltaEnc, DeltaEncMF
+        from deepopt.deltaenc import DeltaEnc
         
 
         self.config['variance'] = ray_config["variance"]  # (2**-3)**2
@@ -319,12 +319,8 @@ class DeepoptConfigure:
             opt = create_optimizer(net, self.config)
 
             for _, (X_train, y_train) in enumerate(train_loader):
-                if self.multi_fidelity:
-                    model = DeltaEncMF(network=net, config=self.config, optimizer=opt, 
-                                       X_train=X_train, y_train=y_train, target=self.target)
-                else:
-                    model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
-                                     X_train=X_train, y_train=y_train, target=self.target)
+                model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
+                                    X_train=X_train, y_train=y_train, target=self.target, multi_fidelity=self.multi_fidelity)
                 model.train()
                 model.fit()
 
@@ -390,16 +386,14 @@ class DeepoptConfigure:
 
         :param out_file: The name of the output file to save the model to
 
-        :returns: The model produced by training the delUQ surrogate. this will be
-            a `DeltaEnc` model if we're doing a single-fidelity run or a `DeltaEncMF`
-            model if we're doing a multi-fidelity run.
+        :returns: The DeltaEnc model produced by training the delUQ surrogate. 
         """
 
         print("Training DelUQ Surrogate.")
         set_deepopt_path()
         from deepopt.surrogate_utils import MLP as Arch
         from deepopt.surrogate_utils import create_optimizer
-        from deepopt.deltaenc import DeltaEnc, DeltaEncMF
+        from deepopt.deltaenc import DeltaEnc
 
 
         warnings.filterwarnings("ignore", category=UserWarning)
@@ -445,13 +439,9 @@ class DeepoptConfigure:
                 self.config[key] = val
         net = Arch(config=self.config, unc_type='deltaenc', input_dim=self.input_dim, output_dim=self.output_dim, device=self.device)
         opt = create_optimizer(net, self.config)
-        
-        if self.multi_fidelity:
-            model = DeltaEncMF(network=net, config=self.config, optimizer=opt, 
-                               X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target)
-        else:
-            model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
-                             X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target)
+
+        model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
+                            X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target, multi_fidelity=self.multi_fidelity)
 
         model.fit()
         if basename(out_file).split('.')[-1]=='ckpt':
@@ -474,8 +464,7 @@ class DeepoptConfigure:
         :returns: The model produced by training. If `model_type` is GP this will
             be a `SingleTaskGP` model from BoTorch if we're doing a single-fidelity run or a
             `SingleTaskMultiFidelityGP` model from BoTorch if we're doing a multi-fidelity run.
-            If `model_type` is delUQ this will be a `DeltaEnc` model if we're doing a
-            single-fidelity run or a `DeltaEncMF` model if we're doing a multi-fidelity run.
+            If `model_type` is delUQ this will be a `DeltaEnc` model.
         """
         
         model: Type[Model] = None
@@ -521,24 +510,19 @@ class DeepoptConfigure:
 
         :param learner_file: The learner file that has the model we want to load
         
-        :returns: Either a `DeltaEnc` model or a `DeltaEncMF` model depending
-            on if we're doing a single-fidelity run or a multi-fidelity run
+        :returns: A 'DeltaEnc' model.
         """
 
         set_deepopt_path()
         from deepopt.surrogate_utils import MLP as Arch
         from deepopt.surrogate_utils import create_optimizer
-        from deepopt.deltaenc import DeltaEnc, DeltaEncMF
+        from deepopt.deltaenc import DeltaEnc
     
         net = Arch(config=self.config, unc_type='deltaenc', input_dim=self.input_dim, output_dim=self.output_dim, device=self.device)
         opt = create_optimizer(net, self.config)
 
-        if self.multi_fidelity:
-            model = DeltaEncMF(network=net, config=self.config, optimizer=opt, 
-                               X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target)
-        else:
-            model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
-                             X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target)
+        model = DeltaEnc(network=net, config=self.config, optimizer=opt, 
+                            X_train=self.full_train_X, y_train=self.full_train_Y, target=self.target, multi_fidelity=self.multi_fidelity)
 
         # DeltaEnc model requries the parent path and file name to be separated.
         # Extension of file is also removed and assumed to be ".ckpt".
@@ -562,8 +546,7 @@ class DeepoptConfigure:
         :returns: The model we loaded in. If `model_type` is GP this will
             be a `SingleTaskGP` model from BoTorch if we're doing a single-fidelity run or a
             `SingleTaskMultiFidelityGP` model from BoTorch if we're doing a multi-fidelity run.
-            If `model_type` is delUQ this will be a `DeltaEnc` model if we're doing a
-            single-fidelity run or a `DeltaEncMF` model if we're doing a multi-fidelity run.
+            If `model_type` is delUQ this will be a `DeltaEnc` model.
         """
 
         model: Type[Model] = None
@@ -609,7 +592,7 @@ class DeepoptConfigure:
         Then whatever acquisition method requested with `acq_method` will be applied.
 
         :param model: The model loaded in by `load_model`. This will be a `SingleTaskMultiFidelityGP`
-            model if we used GP to train the model or a `DeltaEncMF` if we used delUQ.
+            model if we used GP to train the model or a `DeltaEnc` model if we used delUQ.
         :param acq_method: The acquisition method. Either 'GIBBON', 'MaxValEntropy', or 'KG'
         :param q: The number of candidates provided by the user (or the default value assigned
             in Default)

@@ -478,7 +478,8 @@ class DeltaEnc(Model):
                                         optimizer=opt,
                                         X_train=X_train,
                                         y_train=Y_train,
-                                        target=self.target)
+                                        target=self.target,
+                                        multi_fidelity=self.multi_fidelity)
             if hasattr(self,"input_transform"):
                 fantasy_model.input_transform = self.input_transform
                 
