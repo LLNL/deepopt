@@ -7,11 +7,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 import warnings
-from typing import Any, Dict, Tuple, Type, Union, Optional
+from typing import Any, Dict, Tuple, Type, Union, Callable
 from torch.utils.data import DataLoader, TensorDataset
 from torch.optim import Adam, SGD
-
-from deepopt.base import BaseModel
 
 # from botorch.models.utils import fantasize as fantasize_flag
 from botorch import settings
@@ -38,6 +36,7 @@ class DeltaEnc(Model):
         X_train: np.ndarray,
         y_train: np.ndarray,
         target: str = 'dy',  # 'y', 'dy'
+        multi_fidelity: bool = False
     ):
         """
         Initialize an instance of the `DeltaEnc` model for further processing.
@@ -80,13 +79,27 @@ class DeltaEnc(Model):
         self._batch_shape = batch_shape
         self.n_train = X_train.shape[-2]
         
-        self.y_max = y_train.max().detach()
-        self.y_min = y_train.min().detach()
         self.out_scaler = lambda y,y_min,y_max:(y-y_min)/(y_max-y_min)
         self.out_scaler_inv = lambda y,y_min,y_max: y*(y_max-y_min)+y_min
         
-        self.X_train_scaled = X_train.clone()
-        self.y_train_scaled = self.out_scaler(y_train.clone(),self.y_min,self.y_max)
+        if self.multi_fidelity:
+            self.train_fid_locs = [X_train[...,-1]==i for i in X_train[...,-1].unique()]
+            y_train_by_fid = [y_train[fid_loc] for fid_loc in self.train_fid_locs]
+            
+            self.y_max = [Y.max().detach() for Y in y_train_by_fid]
+            self.y_min = [Y.min().detach() for Y in y_train_by_fid]
+            
+            self.X_train_scaled = X_train.clone()
+            self.y_train_scaled = y_train.clone()
+            
+            for fid_loc,y_min,y_max in zip(self.train_fid_locs,self.y_min,self.y_max):
+                self.y_train_scaled[fid_loc] = self.out_scaler(self.y_train_scaled[fid_loc],y_min,y_max)
+        else:
+            self.y_max = y_train.max().detach()
+            self.y_min = y_train.min().detach()
+        
+            self.X_train_scaled = X_train.clone()
+            self.y_train_scaled = self.out_scaler(y_train.clone(),self.y_min,self.y_max)
                         
         self.X_train_nn = self.X_train_scaled.moveaxis(-2,0).reshape(self.n_train,-1)
         self.y_train_nn = self.y_train_scaled.moveaxis(-2,0).reshape(self.n_train,-1)
@@ -110,6 +123,10 @@ class DeltaEnc(Model):
     @batch_shape.setter
     def batch_shape(self,value):
         self._batch_shape = value
+        
+    @property
+    def num_outputs(self):
+        return self.output_dim
         
     # coped from model.py
     # Originally, this method accessed the first dim of self.train_inputs (i.e self.train_inputs[0])
@@ -258,9 +275,9 @@ class DeltaEnc(Model):
     
     def posterior(
         self,
-        X: tensor.Tensor,
-        posterior_transform: Optional[Callable[GPyTorchPosterior]] = None,
-        # observation_noise: Optional[bool] = False,
+        X: torch.Tensor,
+        posterior_transform: Callable[[GPyTorchPosterior], GPyTorchPosterior] = None,
+        # observation_noise: bool = False,
         **kwargs
     ) -> GPyTorchPosterior:
         """
@@ -283,6 +300,54 @@ class DeltaEnc(Model):
             return posterior_transform(GPyTorchPosterior(mvn))
         else:
             return GPyTorchPosterior(mvn)
+        
+    def forward(self, X: torch.Tensor, **kwargs) -> MultivariateNormal:
+        """
+        Compute the model output at X with uncertainties, then use that to
+        compute a multivariate normal.
+
+        :param X: A batch_shape x q x d-dim Tensor, where d is the dimension of the feature
+            space and q is the number of points considered jointly.
+
+        :returns: A multivariate normal object computed using `X`
+        """
+        use_variances = kwargs.get('use_variances')
+        if any([use_variances is None,use_variances is False]):
+            means, covs = self.get_prediction_with_uncertainty(X,get_cov=True,original_scale=False,**kwargs)
+            try:
+                return MultivariateNormal(means,covs+1e-6*torch.eye(covs.shape[-1]))
+            except Exception as e:
+                print(e)
+                print('Trying with stronger regularization (1e-5)')
+                try:
+                    return MultivariateNormal(means,covs+1e-5*torch.eye(covs.shape[-1]))
+                except Exception as e:
+                    print(e)
+                    print('Trying with even stronger regularization (1e-4)')
+                    try:
+                        return MultivariateNormal(means,covs+1e-4*torch.eye(covs.shape[-1]))
+                    except Exception as e:
+                        print(e)
+                        print('Trying with yet stronger regularization (1e-3)')
+                        return MultivariateNormal(means,covs+1e-3*torch.eye(covs.shape[-1]))
+                
+        else:
+            means, variances = self.get_prediction_with_uncertainty(X, **kwargs)
+            if means.ndim == 2 or means.ndim == 1:
+                means_squeeze,variances_squeeze = means.squeeze(), variances.squeeze()
+                if means_squeeze.ndim==0:
+                    means_squeeze = torch.Tensor([means_squeeze])
+                if variances_squeeze.ndim==0:
+                    variances_squeeze = torch.Tensor([variances_squeeze])
+                mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6))
+            else:
+                covar_diag = variances.squeeze(-1) + 1e-6
+                covars = torch.zeros(*covar_diag.shape,covar_diag.shape[-1])
+                for i in range(covar_diag.shape[-1]):
+                    covars[...,i,i] = covar_diag[...,i]
+                mvn = MultivariateNormal(means.squeeze(-1),covars)
+            
+            return mvn
 
     def get_prediction_with_uncertainty(
         self,
@@ -318,6 +383,8 @@ class DeltaEnc(Model):
                 print(e)
         assert q.shape[-len(self.batch_shape)-2:-2]==self.batch_shape, 'Expected tensor to have batch shape matching training batch shape {batch_shape}, instead found tensor of shape {shape}.'.format(batch_shape=self.batch_shape,shape=q.shape)
         input_shape = q.shape
+        if self.multi_fidelity:
+            test_fid_locs = [q[...,-1]==i for i in self.X_train[...,-1].unique()]
         
         q_move = q.moveaxis(-2,0)
         samples_shape = q_move.shape[:-len(self.batch_shape)-1]
@@ -338,7 +405,12 @@ class DeltaEnc(Model):
         assert val.shape[1:-1]==input_shape[:-1], 'Something went wrong with reshaping.'
             
         if original_scale:
-            all_preds = self.out_scaler_inv(val,self.y_min,self.y_max)
+            if self.multi_fidelity:
+                all_preds = torch.zeros_like(val)
+                for fid_loc,ymin,ymax in zip(test_fid_locs,self.y_min,self.y_max):
+                    all_preds[:,fid_loc] = self.out_scaler_inv(val[:,fid_loc],ymin,ymax)
+            else:
+                all_preds = self.out_scaler_inv(val,self.y_min,self.y_max)
         else:
             all_preds = val
                         
@@ -415,321 +487,6 @@ class DeltaEnc(Model):
             state_dict_new = {key_new:state_dict_prev[key_prev].expand(state_dict_new[key_new].shape).detach().clone() 
                               for (key_new,key_prev) in zip(state_dict_new,state_dict_prev)}
             
-            fantasy_model.f_predictor.load_state_dict(state_dict_new)
-            fantasy_model.f_predictor.B = self.f_predictor.B.tile((1,fantasy_model.f_predictor.B.shape[1]//self.f_predictor.B.shape[1]))
-            fantasy_model.fit()
-            fantasy_model.eval()
-            fantasy_model.is_fantasy_model = True
-        return fantasy_model
-
-class DeltaEncMF(BaseModel):
-    """
-    The `DeltaEncMF` class represents the multi-fidelity Delta UQ model for neural
-    networks. This model will allow us to set the training data, fit it, and get
-    our prediciton values with uncertainty.
-    """
-    def __init__(self,
-        network,
-        config,
-        optimizer,
-        X_train,
-        y_train,
-        target='dy',  # 'y', 'dy'
-    ):
-        super().__init__()
-        if isinstance(network,list):
-            self.multi_network = True
-            self.n_epochs = [cf['n_epochs'] for cf in config]
-            self.actual_batch_size = [min(cf['batch_size'], len(X_train)) for cf in config]
-        else:
-            self.multi_network = False
-            self.n_epochs = config['n_epochs']
-            self.actual_batch_size = min(config['batch_size'], len(X_train))
-        
-        self.f_predictor = network
-        self.f_optimizer = optimizer
-        self.config = config
-        self.device = network.device #might not work for multi-networks
-        
-        X_train = X_train.float()
-        y_train = y_train.float()
-
-        self.X_train = X_train
-        self.y_train = y_train
-        
-        self.input_dim = X_train.shape[-1]
-        self.output_dim = y_train.shape[-1]
-                
-        self.is_fantasy_model = False
-        
-        batch_shape = X_train.shape[:-2]
-        self._batch_shape = batch_shape
-        self.n_train = X_train.shape[-2]
-        
-        self.train_fid_locs = [X_train[...,-1]==i for i in X_train[...,-1].unique()]
-        y_train_by_fid = [y_train[fid_loc] for fid_loc in self.train_fid_locs]
-        
-        self.y_max = [Y.max().detach() for Y in y_train_by_fid]
-        self.y_min = [Y.min().detach() for Y in y_train_by_fid]
-        self.out_scaler = lambda y,y_min,y_max:(y-y_min)/(y_max-y_min)
-        self.out_scaler_inv = lambda y,y_min,y_max: y*(y_max-y_min)+y_min
-        
-        self.X_train_scaled = X_train.clone()
-        self.y_train_scaled = y_train.clone()
-        
-        for fid_loc,y_min,y_max in zip(self.train_fid_locs,self.y_min,self.y_max):
-            self.y_train_scaled[fid_loc] = self.out_scaler(self.y_train_scaled[fid_loc],y_min,y_max)
-                
-        self.X_train_nn = self.X_train_scaled.moveaxis(-2,0).reshape(self.n_train,-1)
-        self.y_train_nn = self.y_train_scaled.moveaxis(-2,0).reshape(self.n_train,-1)
-        
-        self.nn_input_dim = self.X_train_nn.shape[1]
-        self.nn_output_dim = self.y_train_nn.shape[1]
-        
-        self.loss_fn = nn.MSELoss()
-
-        self.target = target
-
-        self.train_inputs = self.X_train
-        if self.train_inputs is not None and torch.is_tensor(self.train_inputs):
-            self.train_inputs = (self.train_inputs,)
-            
-        
-    @property
-    def batch_shape(self):
-        return self._batch_shape
-    
-    @batch_shape.setter
-    def batch_shape(self,value):
-        self._batch_shape = value
-        
-    # coped from model.py
-    # Originally, this method accessed the first dim of self.train_inputs (i.e self.train_inputs[0])
-    # because the inputs are assumed to be in batches.
-    def _set_transformed_inputs(self) -> None:
-        r"""Update training inputs with transformed inputs."""
-        if hasattr(self, "input_transform") and not self._has_transformed_inputs:
-            if hasattr(self, "train_inputs"):
-                self._original_train_inputs = self.train_inputs[0]
-                with torch.no_grad():
-                    X_tf = self.input_transform.preprocess_transform(
-                        self.train_inputs[0]
-                    )
-                self.set_train_data(X_tf, strict=False)
-                self._has_transformed_inputs = True
-            else:
-                warnings.warn(
-                    "Could not update `train_inputs` with transformed inputs "
-                    f"since {self.__class__.__name__} does not have a `train_inputs` "
-                    "attribute. Make sure that the `input_transform` is applied to "
-                    "both the train inputs and test inputs.",
-                    RuntimeWarning,
-                )
-
-    # copied from exact_gp.py
-    # This needs to be defined if you are passing in an input transformation.
-    def set_train_data(self, inputs=None, targets=None, strict=True):
-        """
-        Set training data (does not re-fit model hyper-parameters).
-
-        :param torch.Tensor inputs: The new training inputs.
-        :param torch.Tensor targets: The new training targets.
-        :param bool strict: (default True) If `True`, the new inputs and
-            targets must have the same shape, dtype, and device
-            as the current inputs and targets. Otherwise, any shape/dtype/device are allowed.
-        """
-        if inputs is not None:
-            if torch.is_tensor(inputs):
-                inputs = (inputs,)
-            inputs = tuple(input_.unsqueeze(-1) if input_.ndimension() == 1 else input_ for input_ in inputs)
-            if strict:
-                for input_, t_input in zip(inputs, self.train_inputs or (None,)):
-                    for attr in {"shape", "dtype", "device"}:
-                        expected_attr = getattr(t_input, attr, None)
-                        found_attr = getattr(input_, attr, None)
-                        if expected_attr != found_attr:
-                            msg = "Cannot modify {attr} of inputs (expected {e_attr}, found {f_attr})."
-                            msg = msg.format(attr=attr, e_attr=expected_attr, f_attr=found_attr)
-                            raise RuntimeError(msg)
-            self.train_inputs = inputs
-            if self.train_inputs is not None and torch.is_tensor(self.train_inputs):
-                self.train_inputs = (self.train_inputs,)            
-        if targets is not None:
-            if strict:
-                for attr in {"shape", "dtype", "device"}:
-                    expected_attr = getattr(self.train_targets, attr, None)
-                    found_attr = getattr(targets, attr, None)
-                    if expected_attr != found_attr:
-                        msg = "Cannot modify {attr} of targets (expected {e_attr}, found {f_attr})."
-                        msg = msg.format(attr=attr, e_attr=expected_attr, f_attr=found_attr)
-                        raise RuntimeError(msg)
-            self.train_targets = targets
-        self.prediction_strategy = None
-
-    def fit(self):
-        
-        if self.multi_network:
-            pass
-        else:
-            data = TensorDataset(self.X_train_nn, self.y_train_nn)
-            loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
-            self.f_predictor.train()
-            for epoch in range(self.n_epochs):
-                avg_loss = 0.0
-
-                for batch_id, (xi, yi) in enumerate(loader):
-                    xi = xi.to(self.device)
-                    yi = yi.to(self.device)
-                    
-                    xi = self.f_predictor.input_mapping(xi)                            
-                    flipped_x = torch.flip(xi, [0])
-                    diff_x = xi-flipped_x
-                    inp = torch.cat([flipped_x, diff_x], axis=1)
-
-                    if self.target == 'y':
-                        out = yi
-                    else:
-                        flipped_y = torch.flip(yi, [0])
-                        diff_y = yi-flipped_y
-                        out = diff_y
-
-                    out_hat = self.f_predictor(inp)
-                    self.f_optimizer.zero_grad()
-                    f_loss = self.loss_fn(out_hat.float(), out.float())
-                    f_loss.backward()
-                    self.f_optimizer.step()
-                    avg_loss += f_loss.item()/len(loader)
-                
-
-    def save_ckpt(self, path, name):
-        state = {'epoch': self.n_epochs}
-        state['state_dict'] = self.f_predictor.state_dict()
-        state['B'] = self.f_predictor.B
-        state['opt_state_dict'] = self.f_optimizer.state_dict()
-        filename = path + '/' + name + '.ckpt'
-        torch.save(state, filename)
-        print('Saved Ckpts')
-
-    def load_ckpt(self, path, name):
-        saved_state = torch.load(os.path.join(
-            path, name + '.ckpt'), map_location=self.device)
-        self.f_predictor.load_state_dict(saved_state['state_dict'])
-        self.f_predictor.B = saved_state['B']
-
-    def _map_delta_model(self, ref, query):
-        ref = self.f_predictor.input_mapping(ref)
-        query = self.f_predictor.input_mapping(query)
-        diff = query - ref
-        samps = torch.cat([ref, diff], 1)
-        pred = self.f_predictor(samps)
-
-        return pred
-
-    def get_prediction_with_uncertainty(self, q, get_cov=False, original_scale=True, **kwargs: Any):
-        orig_input_shape = q.shape
-        assert q.shape[-1]==self.input_dim, 'Expected tensor to have size=input_dim ({}) in last dimension, found tensor of shape {}'.format(self.input_dim,q.shape)        
-        if q.shape[-len(self.batch_shape)-2:-2]!=self.batch_shape:
-            try:
-                print('Need to expand input shape {shape} to match training batch shape {batch_shape}.'.format(shape=orig_input_shape,batch_shape=self.batch_shape))
-                if q.shape[-len(self.batch_shape)-2:-2]==torch.Size(len(self.batch_shape)*[1]):
-                    q = q.expand(*q.shape[:-len(self.batch_shape)-2],*self.batch_shape,*q.shape[-2:])
-                else:
-                    q = q.expand(*self.batch_shape,*q.shape)
-                    for _ in range(len(self.batch_shape)):
-                        q = q.moveaxis(0,-3)
-            except Exception as e:
-                print('Could not make tensor of shape {shape} match training batch shape {batch_shape}.'.format(shape=orig_input_shape,batch_shape=self.batch_shape))
-                print(e)
-        assert q.shape[-len(self.batch_shape)-2:-2]==self.batch_shape, 'Expected tensor to have batch shape matching training batch shape {batch_shape}, instead found tensor of shape {shape}.'.format(batch_shape=self.batch_shape,shape=q.shape)
-        input_shape = q.shape
-        test_fid_locs = [q[...,-1]==i for i in self.X_train[...,-1].unique()]
-        
-        q_move = q.moveaxis(-2,0)
-        samples_shape = q_move.shape[:-len(self.batch_shape)-1]
-        
-        n_ref = 100
-        ref_choice = torch.randint(self.X_train_nn.shape[0],(n_ref*int(np.prod(samples_shape[1:])),))
-        ref = self.X_train_nn[ref_choice].reshape(n_ref,1,*samples_shape[1:],self.X_train_nn.shape[-1]).expand(n_ref,*samples_shape,self.X_train_nn.shape[-1]).reshape(-1,self.X_train_nn.shape[-1])
-        ref_y = self.y_train_nn[ref_choice].reshape(n_ref,1,*samples_shape[1:],self.y_train_nn.shape[-1]).expand(n_ref,*samples_shape,self.y_train_nn.shape[-1]).reshape(-1,self.y_train_nn.shape[-1])
-        
-        
-        q_combine_samples = q_move.expand(n_ref,*q_move.shape).reshape(-1,*self.batch_shape,self.input_dim)
-        q_reshape = q_combine_samples.reshape(q_combine_samples.shape[0],-1)
-        self.f_predictor.eval()
-        val = self._map_delta_model(ref,q_reshape.float())
-        if self.target != 'y':
-            val+=ref_y
-            
-        val = val.reshape(n_ref,*samples_shape,*self.batch_shape,self.output_dim).moveaxis(1,-2)
-        assert val.shape[1:-1]==input_shape[:-1], 'Something went wrong with reshaping.'
-            
-        if original_scale:
-            all_preds = torch.zeros_like(val)
-            for fid_loc,ymin,ymax in zip(test_fid_locs,self.y_min,self.y_max):
-                all_preds[:,fid_loc] = self.out_scaler_inv(val[:,fid_loc],ymin,ymax)
-        else:
-            all_preds = val
-        
-        mu = all_preds.mean(axis=0)
-        var = all_preds.var(axis=0)
-        if get_cov:
-            assert self.output_dim==1, 'Output must be 1-dimensional to compute covariances.'
-            all_preds = all_preds.squeeze(-1)
-            mu = mu.squeeze(-1)
-            var = var.squeeze(-1)
-            del_pred = all_preds - all_preds.mean(axis=0)
-            cov = torch.einsum('i...A,i...B->...AB',del_pred,del_pred)/(n_ref-1)
-            cov = 0.5*(cov+cov.transpose(-1,-2))
-            return mu, cov
-        else:
-            return mu, var   
-
-    def fantasize(self,X,sampler,observation_noise=True,**kwargs):
-        propagate_grads = kwargs.pop('propagate_grads',False)
-        with settings.propagate_grads(propagate_grads):
-            post_X = self.posterior(X,observation_noise=observation_noise,**kwargs)
-            Y_fantasized = sampler(post_X)
-        
-        Y_fantasized = Y_fantasized.detach().clone()
-        num_fantasies = Y_fantasized.shape[0]
-        X_clone = X.detach().clone()
-        X_clone[...,-1] = X_clone[...,-1].round()
-        
-        if hasattr(self,"input_transform") and self.input_transform is not None:
-            X_clone = self.transform_inputs(X_clone)
-            X_train_orig = self.transform_inputs(self.X_train)
-            y_train_orig = self.y_train.tile((X_train_orig.shape[-2]//self.X_train.shape[-2],1))
-        else:
-            X_train_orig = self.X_train
-            y_train_orig = self.y_train
-        
-        X_train_new = X_clone.expand(num_fantasies,*X_clone.shape)
-        X_train = torch.cat([X_train_orig.expand(*X_train_new.shape[:-2],*X_train_orig.shape[-2:]),X_train_new],axis=-2)
-        Y_train = torch.cat([y_train_orig.expand(*Y_fantasized.shape[:-2],*y_train_orig.shape[-2:]),Y_fantasized],axis=-2)
-        
-        in_size = X_train.moveaxis(-2,0).reshape(X_train.shape[-2],-1).shape[-1]
-        out_size = Y_train.moveaxis(-2,0).reshape(Y_train.shape[-2],-1).shape[-1]
-        
-        config_fantasy = {key:self.config[key] for key in self.config}
-        config_fantasy['n_epochs'] = 20
-        
-        with torch.enable_grad():
-            network = Arch(config=self.config,unc_type='deltaenc',input_dim=in_size,output_dim=out_size,device=self.device)
-            opt = create_optimizer(network,self.config)
-            fantasy_model = DeltaEncMF(network=network,
-                                        config=config_fantasy,
-                                        optimizer=opt,
-                                        X_train=X_train,
-                                        y_train=Y_train,
-                                        target=self.target)
-            if hasattr(self,"input_transform"):
-                fantasy_model.input_transform = self.input_transform
-                
-            state_dict_prev = self.f_predictor.state_dict()
-            state_dict_new = fantasy_model.f_predictor.state_dict()
-            state_dict_new = {key_new:state_dict_prev[key_prev].expand(state_dict_new[key_new].shape).detach().clone() 
-                              for (key_new,key_prev) in zip(state_dict_new,state_dict_prev)}
-
             fantasy_model.f_predictor.load_state_dict(state_dict_new)
             fantasy_model.f_predictor.B = self.f_predictor.B.tile((1,fantasy_model.f_predictor.B.shape[1]//self.f_predictor.B.shape[1]))
             fantasy_model.fit()
