@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import warnings
-from typing import Any, Dict, Tuple, Type, Union
+from typing import Any, Dict, Tuple, Type, Union, Optional
 from torch.utils.data import DataLoader, TensorDataset
 from torch.optim import Adam, SGD
 
@@ -16,13 +16,16 @@ from deepopt.base import BaseModel
 # from botorch.models.utils import fantasize as fantasize_flag
 from botorch import settings
 from botorch.sampling.base import MCSampler
+from botorch.models.model import Model
+from botorch.posteriors.gpytorch import GPyTorchPosterior
+from gpytorch.distributions import MultivariateNormal
 from deepopt.surrogate_utils import create_optimizer
 from deepopt.surrogate_utils import MLP as Arch
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-class DeltaEnc(BaseModel):
+class DeltaEnc(Model):
     """
     The `DeltaEnc` class represents the single-fidelity Delta UQ model for neural
     networks. This model will allow us to set the training data, fit it, and get
@@ -252,6 +255,34 @@ class DeltaEnc(BaseModel):
         samps = torch.cat([ref, diff], 1)
         pred = self.f_predictor(samps)
         return pred
+    
+    def posterior(
+        self,
+        X: tensor.Tensor,
+        posterior_transform: Optional[Callable[GPyTorchPosterior]] = None,
+        # observation_noise: Optional[bool] = False,
+        **kwargs
+    ) -> GPyTorchPosterior:
+        """
+        Computes a posterior based on GPyTorch's multi-variate Normal distributions.
+        Posterior transformation is done if a `posterior_transform` function is provided.
+
+        :param X: A batch_shape x q x d-dim Tensor, where d is the dimension of the feature
+            space and q is the number of points considered jointly.
+        :param posterior_transform: An optional function to transform the computed posterior
+            before returning
+        
+        :returns: A GPyTorchPosterior object with information on the posterior we calculated
+        """
+        # Transformations are applied at evaluation time.
+        # An acquisiton's objective funtion will call
+        # the model's posterior.
+        X = self.transform_inputs(X)
+        mvn = self.forward(X, **kwargs)
+        if posterior_transform:
+            return posterior_transform(GPyTorchPosterior(mvn))
+        else:
+            return GPyTorchPosterior(mvn)
 
     def get_prediction_with_uncertainty(
         self,
