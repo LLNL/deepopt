@@ -5,6 +5,12 @@
 # LICENSE file in the root directory of this source tree.
 
 r"""
+!!! note 
+    This module was adopted from the botorch library. There was a bug
+    we decided to fix on our own so we didn't have to wait for them to
+    adopt our changes. You can view their library
+    [here](https://github.com/pytorch/botorch).
+
 Acquisition functions for Max-value Entropy Search (MES), General
 Information-Based Bayesian Optimization (GIBBON), and
 multi-fidelity MES with noisy observations and trace observations.
@@ -78,15 +84,14 @@ class MaxValueBase(AcquisitionFunction, ABC):
     ) -> None:
         r"""Single-outcome max-value entropy search-based acquisition functions.
 
-        Args:
-            model: A fitted single-outcome model.
-            num_mv_samples: Number of max value samples.
-            posterior_transform: A PosteriorTransform. If using a multi-output model,
-                a PosteriorTransform that transforms the multi-output posterior into a
-                single-output posterior is required.
-            maximize: If True, consider the problem a maximization problem.
-            X_pending: A `m x d`-dim Tensor of `m` design points that have been
-                submitted for function evaluation but have not yet been evaluated.
+        :param model: A fitted single-outcome model.
+        :param num_mv_samples: Number of max value samples.
+        :param posterior_transform: A PosteriorTransform. If using a multi-output model,
+            a PosteriorTransform that transforms the multi-output posterior into a
+            single-output posterior is required.
+        :param maximize: If True, consider the problem a maximization problem.
+        :param X_pending: A `m x d`-dim Tensor of `m` design points that have been
+            submitted for function evaluation but have not yet been evaluated.
         """
         super().__init__(model=model)
 
@@ -111,8 +116,19 @@ class MaxValueBase(AcquisitionFunction, ABC):
         self.weight = 1.0 if maximize else -1.0
         self.set_X_pending(X_pending)
         
-    def forward(self, X):
-        if X.shape[-2]==1:
+    def forward(self, X: Tensor) -> Tensor:
+        """
+        Helper method to re-shape the tensor when requesting multiple candidate points prior to calculating
+        max-value entropy at the design points `X`. Multiple candidate points causes the dimensions of this
+        tensor to be `batch_shape x q x d` where q is the number of candidate points. This will break the
+        q_forward method as it can only handle `batch_shape x 1 x d`-dim tensors.
+
+        :param X: A `batch_shape x q x d`-dim Tensor of `batch_shape` t-batches
+            with `q` candidate points resulting in `q x d`-dim design points each.
+        
+        :returns: A `batch_shape`-dim Tensor of MVE values at the given design points `X`.
+        """
+        if X.shape[-2] == 1:
             return self.q_forward(X)
         else:
             return self.q_forward(X.unsqueeze(-2))
@@ -121,12 +137,10 @@ class MaxValueBase(AcquisitionFunction, ABC):
     def q_forward(self, X: Tensor) -> Tensor:
         r"""Compute max-value entropy at the design points `X`.
 
-        Args:
-            X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
-                with `1` `d`-dim design points each.
+        :param X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
+            with `1` `d`-dim design points each.
 
-        Returns:
-            A `batch_shape`-dim Tensor of MVE values at the given design points `X`.
+        :returns: A `batch_shape`-dim Tensor of MVE values at the given design points `X`.
         """
         # Compute the posterior, posterior mean, variance and std
         posterior = self.model.posterior(
@@ -148,9 +162,8 @@ class MaxValueBase(AcquisitionFunction, ABC):
         Set "pending points" to inform the acquisition function of the candidate
         points that have been generated but are pending evaluation.
 
-        Args:
-            X_pending: `n x d` Tensor with `n` `d`-dim design points that have
-                been submitted for evaluation but have not yet been evaluated.
+        :param X_pending: `n x d` Tensor with `n` `d`-dim design points that have
+            been submitted for evaluation but have not yet been evaluated.
         """
         if X_pending is not None:
             X_pending = X_pending.detach().clone()
@@ -165,13 +178,11 @@ class MaxValueBase(AcquisitionFunction, ABC):
 
         `num_fantasies = 1` for non-fantasized models.
 
-         Args:
-            X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
-                with `1` `d`-dim design point each.
-            kwargs: Other keyword arguments used by subclasses.
+        :param X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
+            with `1` `d`-dim design point each.
+        :param kwargs: Other keyword arguments used by subclasses.
 
-        Returns:
-            A `num_fantasies x batch_shape`-dim Tensor of information gains at the
+        :returns: A `num_fantasies x batch_shape`-dim Tensor of information gains at the
             given design points `X` (`num_fantasies=1` for non-fantasized models).
         """
         pass  # pragma: no cover
@@ -185,13 +196,11 @@ class MaxValueBase(AcquisitionFunction, ABC):
         These samples are used to compute Monte Carlo approximations of expecations
         over the posterior over the function maximum.
 
-        Args:
-            num_samples: The number of samples to draw.
-            X_pending: A `m x d`-dim Tensor of `m` design points that have been
-                submitted for function evaluation but have not yet been evaluated.
+        :param num_samples: The number of samples to draw.
+        :param X_pending: A `m x d`-dim Tensor of `m` design points that have been
+            submitted for function evaluation but have not yet been evaluated.
 
-        Returns:
-            A `num_samples x num_fantasies` Tensor of posterior max value samples
+        :returns: A `num_samples x num_fantasies` Tensor of posterior max value samples
             (`num_fantasies=1` for non-fantasized models).
         """
         pass  # pragma: no cover
@@ -218,21 +227,20 @@ class DiscreteMaxValueBase(MaxValueBase):
     ) -> None:
         r"""Single-outcome MES-like acquisition functions based on discrete MV sampling.
 
-        Args:
-            model: A fitted single-outcome model.
-            candidate_set: A `n x d` Tensor including `n` candidate points to
-                discretize the design space. Max values are sampled from the
-                (joint) model posterior over these points.
-            num_mv_samples: Number of max value samples.
-            posterior_transform: A PosteriorTransform. If using a multi-output model,
-                a PosteriorTransform that transforms the multi-output posterior into a
-                single-output posterior is required.
-            use_gumbel: If True, use Gumbel approximation to sample the max values.
-            maximize: If True, consider the problem a maximization problem.
-            X_pending: A `m x d`-dim Tensor of `m` design points that have been
-                submitted for function evaluation but have not yet been evaluated.
-            train_inputs: A `n_train x d` Tensor that the model has been fitted on.
-                Not required if the model is an instance of a GPyTorch ExactGP model.
+        :param model: A fitted single-outcome model.
+        :param candidate_set: A `n x d` Tensor including `n` candidate points to
+            discretize the design space. Max values are sampled from the
+            (joint) model posterior over these points.
+        :param num_mv_samples: Number of max value samples.
+        :param posterior_transform: A PosteriorTransform. If using a multi-output model,
+            a PosteriorTransform that transforms the multi-output posterior into a
+            single-output posterior is required.
+        :param use_gumbel: If True, use Gumbel approximation to sample the max values.
+        :param maximize: If True, consider the problem a maximization problem.
+        :param X_pending: A `m x d`-dim Tensor of `m` design points that have been
+            submitted for function evaluation but have not yet been evaluated.
+        :param train_inputs: A `n_train x d` Tensor that the model has been fitted on.
+            Not required if the model is an instance of a GPyTorch ExactGP model.
         """
         self.use_gumbel = use_gumbel
 
@@ -265,13 +273,11 @@ class DiscreteMaxValueBase(MaxValueBase):
         These samples are used to compute Monte Carlo approximations of expecations
         over the posterior over the function maximum.
 
-        Args:
-            num_samples: The number of samples to draw.
-            X_pending: A `m x d`-dim Tensor of `m` design points that have been
-                submitted for function evaluation but have not yet been evaluated.
+        :param num_samples: The number of samples to draw.
+        :param X_pending: A `m x d`-dim Tensor of `m` design points that have been
+            submitted for function evaluation but have not yet been evaluated.
 
-        Returns:
-            A `num_samples x num_fantasies` Tensor of posterior max value samples
+        :returns: A `num_samples x num_fantasies` Tensor of posterior max value samples
             (`num_fantasies=1` for non-fantasized models).
         """
         if self.use_gumbel:
@@ -312,6 +318,7 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
     through cyclic optimization and fantasies.
 
     Example:
+
         >>> model = SingleTaskGP(train_X, train_Y)
         >>> candidate_set = torch.rand(1000, bounds.size(1))
         >>> candidate_set = bounds[0] + (bounds[1] - bounds[0]) * candidate_set
@@ -335,25 +342,24 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
     ) -> None:
         r"""Single-outcome max-value entropy search acquisition function.
 
-        Args:
-            model: A fitted single-outcome model.
-            candidate_set: A `n x d` Tensor including `n` candidate points to
-                discretize the design space. Max values are sampled from the
-                (joint) model posterior over these points.
-            num_fantasies: Number of fantasies to generate. The higher this
-                number the more accurate the model (at the expense of model
-                complexity, wall time and memory). Ignored if `X_pending` is `None`.
-            num_mv_samples: Number of max value samples.
-            num_y_samples: Number of posterior samples at specific design point `X`.
-            posterior_transform: A PosteriorTransform. If using a multi-output model,
-                a PosteriorTransform that transforms the multi-output posterior into a
-                single-output posterior is required.
-            use_gumbel: If True, use Gumbel approximation to sample the max values.
-            maximize: If True, consider the problem a maximization problem.
-            X_pending: A `m x d`-dim Tensor of `m` design points that have been
-                submitted for function evaluation but have not yet been evaluated.
-            train_inputs: A `n_train x d` Tensor that the model has been fitted on.
-                Not required if the model is an instance of a GPyTorch ExactGP model.
+        :param model: A fitted single-outcome model.
+        :param candidate_set: A `n x d` Tensor including `n` candidate points to
+            discretize the design space. Max values are sampled from the
+            (joint) model posterior over these points.
+        :param num_fantasies: Number of fantasies to generate. The higher this
+            number the more accurate the model (at the expense of model
+            complexity, wall time and memory). Ignored if `X_pending` is `None`.
+        :param num_mv_samples: Number of max value samples.
+        :param num_y_samples: Number of posterior samples at specific design point `X`.
+        :param posterior_transform: A PosteriorTransform. If using a multi-output model,
+            a PosteriorTransform that transforms the multi-output posterior into a
+            single-output posterior is required.
+        :param use_gumbel: If True, use Gumbel approximation to sample the max values.
+        :param maximize: If True, consider the problem a maximization problem.
+        :param X_pending: A `m x d`-dim Tensor of `m` design points that have been
+            submitted for function evaluation but have not yet been evaluated.
+        :param train_inputs: A `n_train x d` Tensor that the model has been fitted on.
+            Not required if the model is an instance of a GPyTorch ExactGP model.
         """
         super().__init__(
             model=model,
@@ -378,9 +384,8 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
         fantasizes the model on the pending points and draws max-value samples
         from the fantasized model posterior.
 
-        Args:
-            X_pending: `m x d` Tensor with `m` `d`-dim design points that have
-                been submitted for evaluation but have not yet been evaluated.
+        :param X_pending: `m x d` Tensor with `m` `d`-dim design points that have
+            been submitted for evaluation but have not yet been evaluated.
         """
         try:
             init_model = self._init_model
@@ -411,17 +416,14 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
 
         `num_fantasies = 1` for non-fantasized models.
 
-        Args:
-            X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
-                with `1` `d`-dim design point each.
-            mean_M: A `batch_shape x num_fantasies x (m)`-dim Tensor of means.
-            variance_M: A `batch_shape x num_fantasies x (m)`-dim Tensor of variances.
-            covar_mM: A
-                `batch_shape x num_fantasies x (m) x (1 + num_trace_observations)`-dim
-                Tensor of covariances.
+        :param X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
+            with `1` `d`-dim design point each.
+        :param mean_M: A `batch_shape x num_fantasies x (m)`-dim Tensor of means.
+        :param variance_M: A `batch_shape x num_fantasies x (m)`-dim Tensor of variances.
+        :param covar_mM: A `batch_shape x num_fantasies x (m) x (1 + num_trace_observations)`-dim
+            Tensor of covariances.
 
-        Returns:
-            A `num_fantasies x batch_shape`-dim Tensor of information gains at the
+        :returns: A `num_fantasies x batch_shape`-dim Tensor of information gains at the
             given design points `X` (`num_fantasies=1` for non-fantasized models).
         """
         # compute the std_m, variance_m with noisy observation
@@ -525,6 +527,7 @@ class qLowerBoundMaxValueEntropy(DiscreteMaxValueBase):
     q > 1 is supported through greedy batch filling.
 
     Example:
+
         >>> model = SingleTaskGP(train_X, train_Y)
         >>> candidate_set = torch.rand(1000, bounds.size(1))
         >>> candidate_set = bounds[0] + (bounds[1] - bounds[0]) * candidate_set
@@ -542,17 +545,15 @@ class qLowerBoundMaxValueEntropy(DiscreteMaxValueBase):
         batch of design points (`X_pending`), rather than calculating the information
         provided by the whole batch. This allows a modest computational saving.
 
-        Args:
-            X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
-                with `1` `d`-dim design point each.
-            mean_M: A `batch_shape x 1`-dim Tensor of means.
-            variance_M: A `batch_shape x 1`-dim Tensor of variances
-                consisting of `batch_shape` t-batches with `num_fantasies` fantasies.
-            covar_mM: A `batch_shape x num_fantasies x (1 + num_trace_observations)`
-                -dim Tensor of covariances.
+        :param X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
+            with `1` `d`-dim design point each.
+        :param mean_M: A `batch_shape x 1`-dim Tensor of means.
+        :param variance_M: A `batch_shape x 1`-dim Tensor of variances
+            consisting of `batch_shape` t-batches with `num_fantasies` fantasies.
+        :param covar_mM: A `batch_shape x num_fantasies x (1 + num_trace_observations)`
+            -dim Tensor of covariances.
 
-        Returns:
-            A `num_fantasies x batch_shape`-dim Tensor of information gains at the
+        :returns: A `num_fantasies x batch_shape`-dim Tensor of information gains at the
             given design points `X`.
         """
         # TODO: give the Posterior API an add_observation_noise function to avoid
@@ -666,6 +667,7 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
     The batch case `q > 1` is supported through cyclic optimization and fantasies.
 
     Example:
+
         >>> model = SingleTaskGP(train_X, train_Y)
         >>> candidate_set = torch.rand(1000, bounds.size(1))
         >>> candidate_set = bounds[0] + (bounds[1] - bounds[0]) * candidate_set
@@ -691,36 +693,33 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
     ) -> None:
         r"""Single-outcome max-value entropy search acquisition function.
 
-        Args:
-            model: A fitted single-outcome model.
-            candidate_set: A `n x d` Tensor including `n` candidate points to
-                discretize the design space, which will be used to sample the
-                max values from their posteriors.
-            cost_aware_utility: A CostAwareUtility computing the cost-transformed
-                utility from a candidate set and samples of increases in utility.
-            num_fantasies: Number of fantasies to generate. The higher this
-                number the more accurate the model (at the expense of model
-                complexity and performance) and it's only used when `X_pending`
-                is not `None`.
-            num_mv_samples: Number of max value samples.
-            num_y_samples: Number of posterior samples at specific design point `X`.
-            posterior_transform: A PosteriorTransform. If using a multi-output model,
-                a PosteriorTransform that transforms the multi-output posterior into a
-                single-output posterior is required.
-            use_gumbel: If True, use Gumbel approximation to sample the max values.
-            maximize: If True, consider the problem a maximization problem.
-            X_pending: A `m x d`-dim Tensor of `m` design points that have been
-                submitted for function evaluation but have not yet been evaluated.
-            cost_aware_utility: A CostAwareUtility computing the cost-transformed
-                utility from a candidate set and samples of increases in utility.
-            project: A callable mapping a `batch_shape x q x d` tensor of design
-                points to a tensor of the same shape projected to the desired
-                target set (e.g. the target fidelities in case of multi-fidelity
-                optimization).
-            expand: A callable mapping a `batch_shape x q x d` input tensor to
-                a `batch_shape x (q + q_e)' x d`-dim output tensor, where the
-                `q_e` additional points in each q-batch correspond to
-                additional ("trace") observations.
+        :param model: A fitted single-outcome model.
+        :param candidate_set: A `n x d` Tensor including `n` candidate points to
+            discretize the design space, which will be used to sample the
+            max values from their posteriors.
+        :param cost_aware_utility: A CostAwareUtility computing the cost-transformed
+            utility from a candidate set and samples of increases in utility.
+        :param num_fantasies: Number of fantasies to generate. The higher this
+            number the more accurate the model (at the expense of model
+            complexity and performance) and it's only used when `X_pending`
+            is not `None`.
+        :param num_mv_samples: Number of max value samples.
+        :param num_y_samples: Number of posterior samples at specific design point `X`.
+        :param posterior_transform: A PosteriorTransform. If using a multi-output model,
+            a PosteriorTransform that transforms the multi-output posterior into a
+            single-output posterior is required.
+        :param use_gumbel: If True, use Gumbel approximation to sample the max values.
+        :param maximize: If True, consider the problem a maximization problem.
+        :param X_pending: A `m x d`-dim Tensor of `m` design points that have been
+            submitted for function evaluation but have not yet been evaluated.
+        :param project: A callable mapping a `batch_shape x q x d` tensor of design
+            points to a tensor of the same shape projected to the desired
+            target set (e.g. the target fidelities in case of multi-fidelity
+            optimization).
+        :param expand: A callable mapping a `batch_shape x q x d` input tensor to
+            a `batch_shape x (q + q_e)' x d`-dim output tensor, where the
+            `q_e` additional points in each q-batch correspond to
+            additional ("trace") observations.
         """
         super().__init__(
             model=model,
@@ -765,7 +764,18 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
         return self._cost_sampler
 
     def forward(self, X):
-        if X.shape[-2]==1:
+        """
+        Helper method to re-shape the tensor when requesting multiple candidate points prior to calculating
+        max-value entropy at the design points `X`. Multiple candidate points causes the dimensions of this
+        tensor to be `batch_shape x q x d` where q is the number of candidate points. This will break the
+        q_forward method as it can only handle `batch_shape x 1 x d`-dim tensors.
+
+        :param X: A `batch_shape x q x d`-dim Tensor of `batch_shape` t-batches
+            with `q` candidate points resulting in `q x d`-dim design points each.
+        
+        :returns: A `batch_shape`-dim Tensor of MVE values at the given design points `X`.
+        """
+        if X.shape[-2] == 1:
             return self.q_forward(X)
         else:
             return self.q_forward(X.unsqueeze(-2))
@@ -774,12 +784,10 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
     def q_forward(self, X: Tensor) -> Tensor:
         r"""Evaluates `qMultifidelityMaxValueEntropy` at the design points `X`
 
-        Args:
-            X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
-                with `1` `d`-dim design point each.
+        :param X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
+            with `1` `d`-dim design point each.
 
-        Returns:
-            A `batch_shape`-dim Tensor of MF-MVES values at the design points `X`.
+        :returns: A `batch_shape`-dim Tensor of MF-MVES values at the design points `X`.
         """
         X_expand = self.expand(X)  # batch_shape x (1 + num_trace_observations) x d
         X_max_fidelity = self.project(X)  # batch_shape x 1 x d
@@ -824,6 +832,7 @@ class qMultiFidelityLowerBoundMaxValueEntropy(qMultiFidelityMaxValueEntropy):
     The batch case `q > 1` is supported through cyclic optimization and fantasies.
 
     Example:
+
         >>> model = SingleTaskGP(train_X, train_Y)
         >>> candidate_set = torch.rand(1000, bounds.size(1))
         >>> candidate_set = bounds[0] + (bounds[1] - bounds[0]) * candidate_set
@@ -841,17 +850,15 @@ class qMultiFidelityLowerBoundMaxValueEntropy(qMultiFidelityMaxValueEntropy):
         batch of design points (`X_pending`), rather than calculating the information
         provided by the whole batch. This allows a modest computational saving.
 
-        Args:
-            X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
-                with `1` `d`-dim design point each.
-            mean_M: A `batch_shape x 1`-dim Tensor of means.
-            variance_M: A `batch_shape x 1`-dim Tensor of variances
-                consisting of `batch_shape` t-batches with `num_fantasies` fantasies.
-            covar_mM: A `batch_shape x num_fantasies x (1 + num_trace_observations)`
-                -dim Tensor of covariances.
+        :param X: A `batch_shape x 1 x d`-dim Tensor of `batch_shape` t-batches
+            with `1` `d`-dim design point each.
+        :param mean_M: A `batch_shape x 1`-dim Tensor of means.
+        :param variance_M: A `batch_shape x 1`-dim Tensor of variances
+            consisting of `batch_shape` t-batches with `num_fantasies` fantasies.
+        :param covar_mM: A `batch_shape x num_fantasies x (1 + num_trace_observations)`
+            -dim Tensor of covariances.
 
-        Returns:
-            A `num_fantasies x batch_shape`-dim Tensor of information gains at the
+        :returns: A `num_fantasies x batch_shape`-dim Tensor of information gains at the
             given design points `X`.
         """
         return qLowerBoundMaxValueEntropy._compute_information_gain(
@@ -870,18 +877,16 @@ def _sample_max_value_Thompson(
 
     Should generally be called within a `with torch.no_grad()` context.
 
-    Args:
-        model: A fitted single-outcome model.
-        candidate_set: A `n x d` Tensor including `n` candidate points to
-            discretize the design space.
-        num_samples: Number of max value samples.
-        posterior_transform: A PosteriorTransform. If using a multi-output model,
-            a PosteriorTransform that transforms the multi-output posterior into a
-            single-output posterior is required.
-        maximize: If True, consider the problem a maximization problem.
+    :param model: A fitted single-outcome model.
+    :param candidate_set: A `n x d` Tensor including `n` candidate points to
+        discretize the design space.
+    :param num_samples: Number of max value samples.
+    :param posterior_transform: A PosteriorTransform. If using a multi-output model,
+        a PosteriorTransform that transforms the multi-output posterior into a
+        single-output posterior is required.
+    :param maximize: If True, consider the problem a maximization problem.
 
-    Returns:
-        A `num_samples x num_fantasies` Tensor of posterior max value samples.
+    :returns: A `num_samples x num_fantasies` Tensor of posterior max value samples.
     """
     posterior = model.posterior(candidate_set, posterior_transform=posterior_transform)
     weight = 1.0 if maximize else -1.0
@@ -905,18 +910,16 @@ def _sample_max_value_Gumbel(
 
     Should generally be called within a `with torch.no_grad()` context.
 
-    Args:
-        model: A fitted single-outcome model.
-        candidate_set: A `n x d` Tensor including `n` candidate points to
-            discretize the design space.
-        num_samples: Number of max value samples.
-        posterior_transform: A PosteriorTransform. If using a multi-output model,
-            a PosteriorTransform that transforms the multi-output posterior into a
-            single-output posterior is required.
-        maximize: If True, consider the problem a maximization problem.
+    :param model: A fitted single-outcome model.
+    :param candidate_set: A `n x d` Tensor including `n` candidate points to
+        discretize the design space.
+    :param num_samples: Number of max value samples.
+    :param posterior_transform: A PosteriorTransform. If using a multi-output model,
+        a PosteriorTransform that transforms the multi-output posterior into a
+        single-output posterior is required.
+    :param maximize: If True, consider the problem a maximization problem.
 
-    Returns:
-        A `num_samples x num_fantasies` Tensor of posterior max value samples.
+    :returns: A `num_samples x num_fantasies` Tensor of posterior max value samples.
     """
     # define the approximate CDF for the max value under the independence assumption
     posterior = model.posterior(candidate_set, posterior_transform=posterior_transform)

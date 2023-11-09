@@ -1,3 +1,7 @@
+"""
+This module establishes the entrypoint to the DeepOpt library and handles the
+functionality for learning and optimizing.
+"""
 import click
 import json
 import torch
@@ -38,7 +42,7 @@ from sklearn.model_selection import KFold
 from torch import save, from_numpy, manual_seed
 from torch.utils.data import DataLoader, TensorDataset, SubsetRandomSampler
 from types import SimpleNamespace
-from typing import Dict, Any, Union, Type, List, Mapping, Tuple
+from typing import Dict, Any, Union, Type, List, Mapping, Optional, Tuple
 
 
 DEVELOP = False
@@ -46,25 +50,61 @@ DEEPOPT_PATH = ""
 
 
 def set_deepopt_path():
+    """
+    Set the deepopt path if necessary. This will set the deepopt path
+    provided with the `--develop` flag as your path to the deepopt library.
+    """
     if DEVELOP:
         import sys
         sys.path.insert(0, DEEPOPT_PATH)
 
         import deepopt
         print(f"Sourcing deepopt from {deepopt.__file__}.")
-        
+
+
 class FidelityCostModel(DeterministicModel):
-    def __init__(self,fidelity_weights):
+    """
+    The cost model for multi-fidelity runs
+    """
+
+    def __init__(self, fidelity_weights: ndarray):
+        """
+        Initialize the fidelity cost model with the weights for different fidelities.
+        
+        :param fidelity_weights: An ndarray of weight values for different fidelities
+        """
         super().__init__()
         self._num_outputs = 1
         self.fidelity_weights = torch.Tensor(fidelity_weights)
         
-    def forward(self, X):
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        """
+        Compute the fidelity cost based on the provided input tensor.
+
+        Given an input tensor X, extract the last element along the last dimension, round it to the nearest integer,
+        and use this value as an index to retrieve the corresponding fidelity weight from the pre-defined
+        fidelity weights tensor. Return the retrieved weight as a tensor with an additional dimension.
+
+        :param X: The input tensor representing the data for the computation.
+
+        :returns: A tensor containing the fidelity weight for the provided input, expanded to have an additional dimension.
+        """
         return self.fidelity_weights[X[...,-1].round().long()].unsqueeze(-1)
 
 
 class ConditionalOption(click.Option):
+    """
+    A custom click option to represent a conditional option.
+    Conditional options are click options that depend on independent option(s)
+    and therefore cannot be used without said independent option(s).
+    """
+
     def __init__(self, *args, **kwargs):
+        """
+        Initialize the conditional option by saving which independent option(s)
+        this depends on. In some cases we may also need to save what the independent
+        option(s) must be equal to so we'll grab that value too if necessary.
+        """
         self.depends_on = kwargs.pop("depends_on")
         self.equal_to = kwargs.pop("equal_to", None)
         kwargs['help'] = f"[NOTE: This argument is only used if {self.depends_on} is used.] " + kwargs.get('help','')
@@ -74,6 +114,17 @@ class ConditionalOption(click.Option):
     def handle_parse_result(
         self, ctx: click.Context, opts: Mapping[str, Any], args: List[str]
     ) -> Tuple[Any, List[str]]:
+        """
+        After click parses the result, validate the result and check if our conditions
+        are satisfied to use this option.
+
+        :param ctx: A click context object storing the params passed in by the user
+        :param opts: A mapping of options provided for this option
+        :param args: A list of args provided for this option
+
+        :returns: A tuple containing the value of this option that was given by the
+            user and the args that the user provided
+        """
         value, args = super().handle_parse_result(ctx, opts, args)
         is_conditional_opt_used = self.name in opts
         is_dependency_used = False if not ctx.params.get(self.depends_on, None) else True
@@ -89,19 +140,74 @@ class ConditionalOption(click.Option):
         return value, args
     
 class Defaults:
-    random_seed = 4321
-    k_folds = 5
-    model_type = 'GP'
-    multi_fidelity = False
-    num_candidates = 2
-    fidelity_cost = '[1,10]'
-    num_restarts_low = 5
-    num_restarts_high = 15
-    raw_samples_low = 512
-    raw_samples_high = 5000
+    """
+    Default values for the DeepOpt library
+
+    :cvar random_seed: The default random seed. `Default value: 4321`
+    :cvar k_folds: The default k-folds value. `Default value: 5`
+    :cvar model_type: The default model type. Options here are 'GP' or 'delUQ'.
+        `Default value: 'GP'`
+    :cvar multi_fidelity: The default value on whether to run multi-fidelity
+        settings or not. `Default value: False`
+    :cvar num_candidates: The default number of candidates. `Default value: 2`
+    :cvar fidelity_cost: The default fidelity cost range. `Default value: '[1,10]'`
+    :cvar num_restarts_low: The default value for the number of restarts to use (low).
+        This default is used for the KG acquisition method in multi-fidelity runs. `Default
+        value: 5`
+    :cvar num_restarts_high: The default value for the number of restarts to use (high).
+        This default is used for all acquisition methods in single-fidelity runs and non-KG
+        acquisition methods in multi-fidelity runs. `Default value: 5`
+    :cvar raw_samples_low: The default value for the number of raw samples to use (low).
+        `Default value: 512`
+    :cvar raw_samples_high: The default value for the number of raw samples to use (high).
+        `Default value: 5000`
+    """
+    random_seed: int = 4321
+    k_folds: int = 5
+    model_type: str = 'GP'
+    multi_fidelity: bool = False
+    num_candidates: int = 2
+    fidelity_cost: str = '[1,10]'
+    num_restarts_low: int = 5
+    num_restarts_high: int = 15
+    raw_samples_low: int = 512
+    raw_samples_high: int = 5000
     
 @dataclass
 class DeepoptConfigure:
+    """
+    The heart of the DeepOpt library.
+
+    This class handles training the dataset, loading the model, and
+    obtaining the candidates. Both the `deepopt-c learn` and the
+    `deepopt-c optimize` calls will go through this class to handle
+    their processing.
+
+    :cvar config_file: A YAML file with configuration values to use throughout the
+        learn/optimize processes.
+    :cvar data_file: A .npz or .npy file containing the data to use as input
+    :cvar random_seed: The random seed to use when training and optimizing
+    :cvar bounds: Reasonable limits on where to do your optimization search
+    :cvar multi_fidelity: True if we're doing a multi-fidelity run, False otherwise
+    :cvar num_fidelities: The number of fidelities to use if we're doing a
+        multi-fidelity run. `Default: None`
+    :cvar kfolds: The number of kfolds to use when training a delUQ surrogate.
+        `Default: None`
+    :cvar full_train_X: The full input dataset. This is read in from `data_file`.
+        `Default: None`
+    :cvar full_train_Y: The full output dataset. This is read in from `data_file`.
+        `Default: None`
+    :cvar input_dim: The dimensions of `full_train_X`. `Default: None`
+    :cvar output_dim: The dimensions of `full_train_Y`. `Default: None`
+    :cvar config: The configuration options read in from `config_file`. `Default: None`
+    :cvar device: The device to run on. This option is read in from `config_file`.
+        Options for this configuration are `cpu` and `gpu`. `Default: None`
+    :cvar target: Whether to fit the neural network with the y that pairs with the x or
+        to the difference y-Y. This option is read in from `config_file`. Options for this
+        configuration are `y`, `dy`, and `None`. `Default: None`
+    :cvar target_fidelities: Explicitly states our target (highest) fidelity. This is
+        saved in a dict format since it's necessary for BoTorch. `Default: None`
+    """
 
     config_file: str
     data_file: str
@@ -152,7 +258,15 @@ class DeepoptConfigure:
         random.seed(self.random_seed)
         
 
-    def _delta_enc(self, q, a, y_q):  # a is the anchor and q is the query
+    def _delta_enc(self, q: torch.Tensor, a: torch.Tensor, y_q: int) -> torch.Tensor:  # a is the anchor and q is the query
+        """
+        Encodes the input tensors `q` and `a` by computing the residual between them.
+
+        :param q: The query tensor
+        :param a: The anchor tensor
+
+        :returns: Encoded tensor obtained by concatenating the residual and the anchor along axis 1
+        """
         residual = q - a
         inp = torch.cat([residual, a], axis=1)
         out = y_q
@@ -163,11 +277,9 @@ class DeepoptConfigure:
         """
         Training experiment used by ray tuning.
 
-        Args:
-            ray_config (Dict[str, Any]): Configurations for the tuning, i.e. hyperparmeters to tune.
+        :param ray_config: Configurations for the tuning, i.e. hyperparmeters to tune.
 
-        Returns:
-            Dict[str, Any]: A dictionary representing the score.
+        :returns: A dictionary representing the score.
         """
         set_deepopt_path()
         from deepopt.surrogate_utils import MLP as Arch
@@ -232,7 +344,16 @@ class DeepoptConfigure:
         return {"score": cv_score.item()}
 
 
-    def _train_gp(self, out_file: str) -> SingleTaskMultiFidelityGP:
+    def _train_gp(self, out_file: str) -> Union[SingleTaskGP, SingleTaskMultiFidelityGP]:
+        """
+        Train the GP surrogate and save the model produced.
+
+        :param out_file: The name of the output file to save the model to
+
+        :returns: The model produced by training the GP surrogate. This will be a `SingleTaskGP`
+             model from BoTorch if we're doing a single-fidelity run or a `SingleTaskMultiFidelityGP`
+             model from BoTorch if we're doing a multi-fidelity run.
+        """
 
         print("Training GP Surrogate.")
         model: Union[SingleTaskGP, SingleTaskMultiFidelityGP] = None
@@ -263,6 +384,16 @@ class DeepoptConfigure:
 
 
     def _train_deluq(self, out_file: str) -> Type[Model]:
+        """
+        Train the delUQ surrogate and save the model produced. We use ray to
+        train the surrogate here.
+
+        :param out_file: The name of the output file to save the model to
+
+        :returns: The model produced by training the delUQ surrogate. this will be
+            a `DeltaEnc` model if we're doing a single-fidelity run or a `DeltaEncMF`
+            model if we're doing a multi-fidelity run.
+        """
 
         print("Training DelUQ Surrogate.")
         set_deepopt_path()
@@ -332,6 +463,20 @@ class DeepoptConfigure:
         return model
     
     def train(self, model_type: str, out_file: str) -> Type[Model]:
+        """
+        Train the surrogate model (either GP or delUQ) and save the resulting
+        model to a checkpoint file.
+
+        :param model_type: The type of model to train (GP or delUQ)
+        :param out_file: The name of the checkpoint file where we will save
+            the model trained on the dataset
+        
+        :returns: The model produced by training. If `model_type` is GP this will
+            be a `SingleTaskGP` model from BoTorch if we're doing a single-fidelity run or a
+            `SingleTaskMultiFidelityGP` model from BoTorch if we're doing a multi-fidelity run.
+            If `model_type` is delUQ this will be a `DeltaEnc` model if we're doing a
+            single-fidelity run or a `DeltaEncMF` model if we're doing a multi-fidelity run.
+        """
         
         model: Type[Model] = None
 
@@ -344,6 +489,14 @@ class DeepoptConfigure:
     
 
     def _load_gp(self, learner_file: str)-> Union[SingleTaskGP, SingleTaskMultiFidelityGP]:
+        """
+        Load in the GP model from the learner file.
+
+        :param learner_file: The learner file that has the model we want to load
+        
+        :returns: Either a `SingleTaskGP` model or a `SingleTaskMultiFidelityGP` model
+            depending on if we're doing a single-fidelity run or a multi-fidelity run
+        """
 
         model: Union[SingleTaskGP, SingleTaskMultiFidelityGP] = None
 
@@ -363,6 +516,14 @@ class DeepoptConfigure:
     
 
     def _load_deluq(self, learner_file: str) -> Type[Model]:
+        """
+        Load in the delUQ model from the learner file.
+
+        :param learner_file: The learner file that has the model we want to load
+        
+        :returns: Either a `DeltaEnc` model or a `DeltaEncMF` model depending
+            on if we're doing a single-fidelity run or a multi-fidelity run
+        """
 
         set_deepopt_path()
         from deepopt.surrogate_utils import MLP as Arch
@@ -391,6 +552,19 @@ class DeepoptConfigure:
         return model
 
     def load_model(self, model_type: str, learner_file: str) -> Type[Model]:
+        """
+        Load the surrogate model (either GP or delUQ) from the learner file.
+
+        :param model_type: The type of model to load (GP or delUQ)
+        :param learner_file: The name of the checkpoint file where we will load
+            the model in from
+        
+        :returns: The model we loaded in. If `model_type` is GP this will
+            be a `SingleTaskGP` model from BoTorch if we're doing a single-fidelity run or a
+            `SingleTaskMultiFidelityGP` model from BoTorch if we're doing a multi-fidelity run.
+            If `model_type` is delUQ this will be a `DeltaEnc` model if we're doing a
+            single-fidelity run or a `DeltaEncMF` model if we're doing a multi-fidelity run.
+        """
 
         model: Type[Model] = None
 
@@ -401,7 +575,21 @@ class DeepoptConfigure:
 
         return model
     
-    def _project(self, X):
+    def _project(self, X: torch.Tensor) -> torch.Tensor:
+        """
+        Project X onto the target set of fidelities.
+
+        This function assumes that the set of feasible fidelities is a box, so projecting here
+        just means setting each fidelity parameter to its target value.
+
+        (This docstring was copy/pasted from Botorch at:
+        https://botorch.org/api/acquisition.html#botorch.acquisition.utils.project_to_target_fidelity)
+
+        :param X: A batch_shape x q x d-dim Tensor of with q d-dim design points for each t-batch
+
+        :returns: A batch_shape x q x d-dim Tensor X_proj with fidelity parameters projected to
+            the `target_fidelity` values.
+        """
         return project_to_target_fidelity(X=X, target_fidelities=self.target_fidelities)
 
     def _get_candidates_mf(
@@ -410,9 +598,32 @@ class DeepoptConfigure:
         acq_method: str, 
         q: int, 
         fidelity_cost: ndarray, 
-        risk_objective: Type[RiskMeasureMCObjective] = None,
-        risk_n_deltas: int = None, 
-        n_fantasies: int = 128):
+        risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
+        risk_n_deltas: Optional[int] = None, 
+        n_fantasies: Optional[int] = 128
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Get the candidates for a multi-fidelity run.
+
+        The bounds will be set and the fidelity cost model will be applied here first.
+        Then whatever acquisition method requested with `acq_method` will be applied.
+
+        :param model: The model loaded in by `load_model`. This will be a `SingleTaskMultiFidelityGP`
+            model if we used GP to train the model or a `DeltaEncMF` if we used delUQ.
+        :param acq_method: The acquisition method. Either 'GIBBON', 'MaxValEntropy', or 'KG'
+        :param q: The number of candidates provided by the user (or the default value assigned
+            in Default)
+        :param fidelity_cost: A list of how expensive each fidelity should be seen as
+        :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
+            be determined by the `risk_measure` argument given by the user to the `deepopt-c optimize`
+            command.
+        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
+        :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
+            the model (at the expense of model complexity and performance).
+
+        :returns: A two element tuple containing a q x d-dim tensor of generated candidates
+            and an associated acquisition value.
+        """
 
         set_deepopt_path()
         from deepopt.acquisition import qMultiFidelityMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy
@@ -501,10 +712,31 @@ class DeepoptConfigure:
         model: Type[Model], 
         acq_method: str, 
         q: int,
-        risk_objective: Type[RiskMeasureMCObjective] = None,
-        risk_n_deltas: int = None,
-        n_fantasies: int = 128
+        risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
+        risk_n_deltas: Optional[int] = None,
+        n_fantasies: Optional[int] = 128
     ) -> Tuple[Any, Any]:
+        """
+        Get the candidates for a single-fidelity run.
+
+        The bounds will be set first, then whatever acquisition method requested with `acq_method`
+        will be applied.
+
+        :param model: The model loaded in by `load_model`. This will be a `SingleTaskGP`
+            model if we used GP to train the model or a `DeltaEnc` if we used delUQ.
+        :param acq_method: The acquisition method. Either 'EI', 'NEI', 'MaxValEntropy', or 'KG'
+        :param q: The number of candidates provided by the user (or the default value assigned
+            in Default)
+        :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
+            be determined by the `risk_measure` argument given by the user to the `deepopt-c optimize`
+            command.
+        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
+        :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
+            the model (at the expense of model complexity and performance).
+
+        :returns: A two element tuple containing a q x d-dim tensor of generated candidates
+            and an associated acquisition value.
+        """
         
         set_deepopt_path()
         from deepopt.acquisition import qMaxValueEntropy, qLowerBoundMaxValueEntropy
@@ -559,10 +791,27 @@ class DeepoptConfigure:
         model: Type[Model], 
         acq_method: str, 
         q: int,
-        risk_objective: Type[RiskMeasureMCObjective] = None,
-        risk_n_deltas: int = None,
-        fidelity_cost: ndarray = None
+        risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
+        risk_n_deltas: Optional[int] = None,
+        fidelity_cost: Optional[ndarray] = None
         ) -> Tuple[Any, Any]:
+        """
+        Get the candidates using the model loaded in with `load_model` and the acquisition method
+        requested by the user.
+
+        :param model: The model loaded in by `load_model`.
+        :param acq_method: The acquisition method. Either 'EI', 'NEI', 'GIBBON', 'MaxValEntropy', or 'KG'
+        :param q: The number of candidates provided by the user (or the default value assigned
+            in Default)
+        :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
+            be determined by the `risk_measure` argument given by the user to the `deepopt-c optimize`
+            command.
+        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
+        :param fidelity_cost: A list of how expensive each fidelity should be seen as
+
+        :returns: A two element tuple containing a q x d-dim tensor of generated candidates
+            and an associated acquisition value.
+        """
         
         print(f"Number of simulations: {len(self.full_train_X)}. Current max: {self.full_train_Y.max().item():.5f}")
 
@@ -572,7 +821,15 @@ class DeepoptConfigure:
             candidates, acq_value = self._get_candidates_sf(model=model, acq_method=acq_method, q=q, risk_objective=risk_objective,risk_n_deltas=risk_n_deltas)
         return candidates, acq_value
 
-    def get_risk_measure_objective(self, risk_measure, **kwargs) -> Type[RiskMeasureMCObjective]:
+    def get_risk_measure_objective(self, risk_measure: str, **kwargs) -> Type[RiskMeasureMCObjective]:
+        """
+        Given a risk measure, return the associated BoTorch risk measure object.
+
+        :param risk_measure: The risk measure to use. Options are 'CVaR' (Conditional Value-at-Risk)
+            and 'VaR' (Value-at-Risk).
+
+        :returns: Either a `CVaR` or `VaR` risk measure object from BoTorch
+        """
         if risk_measure == "CVaR":
             return CVaR(**kwargs)
         elif risk_measure == "VaR":
@@ -580,19 +837,47 @@ class DeepoptConfigure:
         else:
             return None
         
-    def _multiv_normal_samples(self, n, std_devs):
+    def _multiv_normal_samples(self, n: int, std_devs: ndarray) -> torch.Tensor:
+        """
+        Create a multivariate normal and draw `n` quasi-Monte Carlo (qMC) samples from the
+        multivariate normal.
+
+        :param n: The number of qMC samples to draw from the multivariate normal we'll
+            obtain from `std_devs`
+        :param std_devs: The tensor we'll draw qMC samples from
+
+        :returns: A n x d tensor of samples where d is the dimension of the samples
+        """
         mean = torch.zeros_like(std_devs)
         cov = torch.diag(std_devs)
         engine = MultivariateNormalQMCEngine(mean, cov,seed=self.random_seed)
         samples = engine.draw(n)
         return samples
     
-    def get_input_pertubation(self, risk_n_deltas: int, bounds: ndarray, X_stddev: ndarray):
+    def get_input_perturbation(self, risk_n_deltas: int, bounds: ndarray, X_stddev: ndarray) -> InputPerturbation:
+        """
+        Get the input perturbation.
+
+        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
+        :param bounds: Scaled bounds for each input dimension
+        :param X_stddev: Scaled uncertainity in X (stddev) in each dimension
+
+        :returns: A transform that adds the set of perturbations to the given input
+        """
         assert (len(X_stddev) == len(bounds.T)), f"Expected {len(bounds.T)} values for X_stddev but recieved {len(X_stddev)}."
         input_pertubation = InputPerturbation(perturbation_set=self._multiv_normal_samples(risk_n_deltas, X_stddev), bounds=bounds).eval()
         return input_pertubation
     
-    def learn(self,outfile, model_type=Defaults.model_type) -> None:
+    def learn(outfile: str, model_type: str = Defaults.model_type) -> None:
+        """
+        The method to process the `deepopt-c learn` command.
+
+        Here we'll train a model on our dataset and save the model to a checkpoint file.
+
+        :param outfile: The name of the checkpoint file where we will save the model
+            trained on the dataset
+        :param model_type: The type of surrogate to use. Options: 'GP' or 'delUQ'
+        """
         print(f"""
         Infile: {self.data_file}
         Outfile: {outfile}
@@ -605,9 +890,37 @@ class DeepoptConfigure:
         """)
         self.train(model_type=model_type,out_file=outfile)
         
-    def optimize(self,outfile,learner_file,acq_method,model_type=Defaults.model_type,
-                 num_candidates=Defaults.num_candidates,fidelity_cost=Defaults.fidelity_cost,
-                 risk_measure=None,risk_level=None,risk_n_deltas=None,x_stddev=None) -> None:
+    def optimize(
+        outfile: str,
+        learner_file: str,
+        acq_method: str,
+        model_type: str = Defaults.model_type,
+        num_candidates: int = Defaults.num_candidates,
+        fidelity_cost: str = Defaults.fidelity_cost,
+        risk_measure: str = None,
+        risk_level: float = None,
+        risk_n_deltas: int = None,
+        x_stddev: str = None
+    ) -> None:
+        """
+        The function to process the `deepopt-c optimize` command.
+
+        Here we'll use the model created by `learn` to produce new simulation points.
+
+        :param outfile: The name of the file to save the proposed candidates in
+        :param learner_file: The name of the checkpoint file produced by `learn`
+        :param acq_method: The acquisiton function. Single-fidelity options:
+            'KG', 'MaxValEntropy', 'EI', or 'NEI'. Multi-fidelity options: 'KG' or
+            'MaxValEntropy'
+        :param model_type: The type of surrogate to use. Options: 'GP' or 'delUQ'
+        :param num_candidates: The number of candidates
+        :param fidelity_cost: List of costs for each fidelity
+        :param risk_measure: The risk measure to use. Options: 'CVaR' (Conditional Value-at-Risk)
+                or 'VaR' (Value-at-Risk).
+        :param risk_level: The risk level (a float between 0 and 1)
+        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
+        :param x_stddev: Uncertainity in X (stddev) in each dimension
+        """
         print(f"""
         Infile: {self.data_file}
         Outfile: {outfile}
@@ -653,8 +966,11 @@ class DeepoptConfigure:
         np.save(outfile, candidates_npy)
 
 @click.group()
-@click.option("--develop", help="If developing package, pass in path to your development repo. [example: --develop /usr/workspace/tran67/deepopt]", type=click.Path(exists=True))
+@click.option("--develop", help="If developing package, pass in path to your development repo. [example: --develop /usr/workspace/tran67/deepopt]", type=click.Path(exists=True), required=False)
 def deepopt_cli(develop):
+    """
+    The entrypoint to the DeepOpt library.
+    """
     if develop:
         global DEEPOPT_PATH, DEVELOP
         DEEPOPT_PATH = develop
@@ -671,6 +987,9 @@ def deepopt_cli(develop):
 @click.option("-m", "--model-type", help="What kind of surrogate are you using?", default=Defaults.model_type, show_default=True, type=click.Choice(["GP", "delUQ"]))
 @click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=Defaults.multi_fidelity, type=click.BOOL, show_default=True)
 def learn(infile, outfile, config_file, bounds, random_seed, k_folds, model_type, multi_fidelity) -> None:
+    """
+    Train a model on a dataset and save that model to an output file.
+    """
     bounds = torch.FloatTensor(json.loads(bounds)).T
     dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds,k_folds=k_folds)
     dc.learn(outfile=outfile,model_type=model_type)
@@ -692,15 +1011,15 @@ def learn(infile, outfile, config_file, bounds, random_seed, k_folds, model_type
               Multi     - [KG|MaxValEntropy] 
               """, 
               type=click.Choice(["EI", "NEI", "KG", "MaxValEntropy"]), required=True)
-@click.option("-r", "--random-seed", help="Random seed.", default=4321, show_default=True, type=click.INT)
-@click.option("-m", "--model-type", help="What kind of surrogate are you using?", show_default=True, type=click.Choice(["GP", "delUQ"]))
-@click.option("-q", "--num-candidates", help="The number of candidates.", default=2, type=click.INT, show_default=True)
-@click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=False, show_default=True, type=click.BOOL)
+@click.option("-r", "--random-seed", help="Random seed.", default=Defaults.random_seed, show_default=True, type=click.INT)
+@click.option("-m", "--model-type", help="What kind of surrogate are you using?", show_default=True, default=Defaults.model_type, type=click.Choice(["GP", "delUQ"]))
+@click.option("-q", "--num-candidates", help="The number of candidates.", default=Defaults.num_candidates, type=click.INT, show_default=True)
+@click.option("--multi-fidelity", help="Single or mult-fidelity?", is_flag=True, default=Defaults.multi_fidelity, show_default=True, type=click.BOOL)
 @click.option("--risk-measure", help="The risk measure to apply.", type=click.Choice(["VaR", "CVaR"]))
 @click.option("--risk-level", help="The risk level.", type=click.FloatRange(0, 1, min_open=True), cls=ConditionalOption, depends_on="risk_measure")
-@click.option("--risk-n-deltas", help="The number of input pertubations to sample for X's uncertainty. [example: --risk-n-deltas 10].", type=click.INT, cls=ConditionalOption, depends_on="risk_measure")
+@click.option("--risk-n-deltas", help="The number of input perturbations to sample for X's uncertainty. [example: --risk-n-deltas 10].", type=click.INT, cls=ConditionalOption, depends_on="risk_measure")
 @click.option("--X-stddev", help="Uncertainity in X (stddev) in each dimension. [example: --X-stddev [0.00005]].", type=click.STRING, cls=ConditionalOption, depends_on="risk_measure")
-@click.option("--fidelity-cost", help="List of costs for each fidelity.", type=click.STRING, default='[1,10]', show_default=True, cls=ConditionalOption, depends_on="multi_fidelity", equal_to=True)
+@click.option("--fidelity-cost", help="List of costs for each fidelity.", type=click.STRING, default=Defaults.fidelity_cost, show_default=True, cls=ConditionalOption, depends_on="multi_fidelity", equal_to=True)
 def optimize(
     infile, 
     outfile, 
@@ -718,6 +1037,9 @@ def optimize(
     x_stddev, 
     fidelity_cost,
     ) -> None:
+    """
+    Load in the model created by `learn` and use it to propose new simulation points.
+    """
     bounds = torch.FloatTensor(json.loads(bounds)).T
     dc = DeepoptConfigure(config_file=config_file, data_file=infile, multi_fidelity=multi_fidelity, random_seed=random_seed,bounds=bounds)
     

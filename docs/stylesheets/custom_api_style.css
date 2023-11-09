@@ -1,0 +1,27 @@
+.doc.doc-object.doc-class .doc.doc-children {
+    margin-left: 1.5em;
+}
+
+h1.doc-heading {
+    font-size: 1.75em;
+}
+
+h2.doc-heading {
+    font-size: 1.5em;
+}
+
+h3.doc-heading {
+    font-size: 1.25em;
+}
+
+h4.doc-heading {
+    font-size: 1em;
+}
+
+h5.doc-heading {
+    font-size: .75em;
+}
+
+h6.doc-heading {
+    font-size: 0.5em;
+}

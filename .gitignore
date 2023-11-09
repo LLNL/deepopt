@@ -1,11 +1,28 @@
-**/.ipynb_checkpoints
-**/.DS_Store
-**/__pycache__
-*deepopt.egg-info
-**/throwaway
-**/deepopt_venv
-*.rdb
-*build/
-**/*.out
-**/*.ckpt
+# Python bytecode and serialized files
+__pycache__/
+*.py[cod]
+*.pkl
+*.db
+*.npy
+*.npz
+*.hdf5
+dist/
+build/
+
+# Egg packaging
+*.egg
+*.egg-info/
+
+# Virtual environments
+deepopt_venv/
+
+# Jupyter
 *.ipynb
+*.ipynb_checkpoints
+
+# Misc file extension types
+*.ckpt
+*.out
+*.DS_Store
+*.rdb
+throwaway

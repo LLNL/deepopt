@@ -1,5 +1,11 @@
+"""
+The `base` module contains the base class for all models used throughout the DeepOpt
+codebase.
+"""
 import os
 import numpy as np
+from typing import Any, Optional, Tuple
+
 import torch
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
@@ -10,7 +16,16 @@ class BaseModel(Model):
     Base class for all models implemented in the repo
     """
 
-    def post_forward(self, means, variances):
+    def post_forward(self, means: torch.Tensor, variances: torch.Tensor) -> MultivariateNormal:
+        """
+        Post processing of the mean and variance tensors returned by the `forward` method.
+        Here we use the mean and variance tensors to create a multivariate normal object.
+
+        :param means: A tensor of means from our predictions
+        :param variances: A tensor of variances from our predictions
+
+        :returns: A multivariate normal object calculated from `means` and `variances`
+        """
         # TODO: maybe the two cases can be merged into one with torch.diag_embed
         assert means.ndim == variances.ndim
         if means.ndim == 2 or means.ndim == 1:
@@ -72,18 +87,43 @@ class BaseModel(Model):
     def num_outputs(self):
         return self.output_dim
 
-    def get_prediction_with_uncertainty(self, X, **kwargs):
+    def get_prediction_with_uncertainty(self, X: torch.Tensor, **kwargs: Any) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Given a tensor calculate the prediction with uncertainty.
+
+        :param X: A tensor with data we'll calculate prediction with uncertainty for
+
+        :returns: A tuple of tensors where the first tensor represents the mean of the predictions
+            and the second represents either the variance or co-variance of the predictions
+        """
         if X.ndim == 3:
             assert len(kwargs) == 0, "no kwargs can be given if X.ndim == 3"
             preds = self.get_prediction_with_uncertainty(X.view(X.size(0) * X.size(1), X.size(2)))
             return preds[0].view(X.size(0), X.size(1), 1), preds[1].view(X.size(0), X.size(1), 1)
-        elif X.ndim ==4:
+        elif X.ndim == 4:
             assert len(kwargs) == 0, "no kwargs can be given if X.ndim == 4"
             preds = self.get_prediction_with_uncertainty(X.view(X.size(0) * X.size(1) * X.size(2), X.size(3)))
             return preds[0].view(X.size(0), X.size(1), X.size(2), 1), preds[1].view(X.size(0), X.size(1), X.size(2), 1)
 
 
-    def posterior(self, X, posterior_transform=None, observation_noise=False,**kwargs):
+    def posterior(
+        self,
+        X: tensor.Tensor,
+        posterior_transform: Optional[Callable[GPyTorchPosterior]] = None,
+        # observation_noise: Optional[bool] = False,
+        **kwargs
+    ) -> GPyTorchPosterior:
+        """
+        Computes a posterior based on GPyTorch's multi-variate Normal distributions.
+        Posterior transformation is done if a `posterior_transform` function is provided.
+
+        :param X: A batch_shape x q x d-dim Tensor, where d is the dimension of the feature
+            space and q is the number of points considered jointly.
+        :param posterior_transform: An optional function to transform the computed posterior
+            before returning
+        
+        :returns: A GPyTorchPosterior object with information on the posterior we calculated
+        """
         # Transformations are applied at evaluation time.
         # An acquisiton's objective funtion will call
         # the model's posterior.
@@ -94,7 +134,16 @@ class BaseModel(Model):
         else:
             return GPyTorchPosterior(mvn)
 
-    def forward(self, X, **kwargs):
+    def forward(self, X: tensor.Tensor, **kwargs) -> MultivariateNormal:
+        """
+        Compute the model output at X with uncertainties, then use that to
+        compute a multivariate normal.
+
+        :param X: A batch_shape x q x d-dim Tensor, where d is the dimension of the feature
+            space and q is the number of points considered jointly.
+
+        :returns: A multivariate normal object computed using `X`
+        """
         use_variances = kwargs.get('use_variances')
         if any([use_variances is None,use_variances is False]):
             means, covs = self.get_prediction_with_uncertainty(X,get_cov=True,original_scale=False,**kwargs)
