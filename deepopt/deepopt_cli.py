@@ -868,7 +868,7 @@ class DeepoptConfigure:
         input_pertubation = InputPerturbation(perturbation_set=self._multiv_normal_samples(risk_n_deltas, X_stddev), bounds=bounds).eval()
         return input_pertubation
     
-    def learn(outfile: str, model_type: str = Defaults.model_type) -> None:
+    def learn(self, outfile: str, model_type: str = Defaults.model_type) -> None:
         """
         The method to process the `deepopt-c learn` command.
 
@@ -891,6 +891,7 @@ class DeepoptConfigure:
         self.train(model_type=model_type,out_file=outfile)
         
     def optimize(
+        self,
         outfile: str,
         learner_file: str,
         acq_method: str,
@@ -943,7 +944,7 @@ class DeepoptConfigure:
             if self.multi_fidelity:
                 x_stddev_scaled[-1] = 0
             risk_objective = self.get_risk_measure_objective(risk_measure=risk_measure, alpha=risk_level, n_w=risk_n_deltas)
-            input_pertubation = self.get_input_pertubation(risk_n_deltas=risk_n_deltas, bounds=bounds_scaled, X_stddev=x_stddev_scaled)
+            input_pertubation = self.get_input_perturbation(risk_n_deltas=risk_n_deltas, bounds=bounds_scaled, X_stddev=x_stddev_scaled)
             model.input_transform = input_pertubation
         else:
             risk_objective = None
