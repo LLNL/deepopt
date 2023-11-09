@@ -63,6 +63,7 @@ class DeltaEnc(Model):
         self.f_optimizer = optimizer
         self.config = config
         self.device = network.device #might not work for multi-networks
+        self.multi_fidelity = multi_fidelity
         
         X_train = X_train.float()
         y_train = y_train.float()
