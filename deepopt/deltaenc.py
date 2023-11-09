@@ -1,14 +1,21 @@
+"""
+This module contains the Delta UQ models used for single-fidelity and multi-fidelity
+neural networks.
+"""
 import os
 import numpy as np
 import torch
 import torch.nn as nn
 import warnings
+from typing import Any, Dict, Tuple, Type, Union
 from torch.utils.data import DataLoader, TensorDataset
+from torch.optim import Adam, SGD
 
-from .base import BaseModel
+from deepopt.base import BaseModel
 
 # from botorch.models.utils import fantasize as fantasize_flag
 from botorch import settings
+from botorch.sampling.base import MCSampler
 from deepopt.surrogate_utils import create_optimizer
 from deepopt.surrogate_utils import MLP as Arch
 
@@ -16,15 +23,30 @@ from deepopt.surrogate_utils import MLP as Arch
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 class DeltaEnc(BaseModel):
+    """
+    The `DeltaEnc` class represents the single-fidelity Delta UQ model for neural
+    networks. This model will allow us to set the training data, fit it, and get
+    our prediciton values with uncertainty.
+    """
     def __init__(self,
-                 network,
-                 config,
-                 optimizer,
-                 X_train,
-                 y_train,
-                 target='dy',  # 'y', 'dy'
-                 ):
+        network: Arch,
+        config: Dict[str, Any],
+        optimizer: Union[Adam, SGD],
+        X_train: np.ndarray,
+        y_train: np.ndarray,
+        target: str = 'dy',  # 'y', 'dy'
+    ):
+        """
+        Initialize an instance of the `DeltaEnc` model for further processing.
 
+        :param network: A neural network module
+        :param config: Configuration settings provided by the user
+        :param optimizer: An optimizer object from torch to help train the neural network
+        :param X_train: The full input dataset
+        :param y_train: The full output array
+        :param target: Whether to fit the neural network with the y that pairs with the x or
+            to the difference y-Y. Options for this configuration are `y` and `dy`
+        """
         super().__init__()
         if isinstance(network,list):
             self.multi_network = True
@@ -111,15 +133,15 @@ class DeltaEnc(BaseModel):
 
     # copied from exact_gp.py
     # This needs to be defined if you are passing in an input transformation.
-    def set_train_data(self, inputs=None, targets=None, strict=True):
+    def set_train_data(self, inputs: torch.Tensor = None, targets: torch.Tensor = None, strict: bool = True):
         """
         Set training data (does not re-fit model hyper-parameters).
 
-        :param torch.Tensor inputs: The new training inputs.
-        :param torch.Tensor targets: The new training targets.
-        :param bool strict: (default True) If `True`, the new inputs and
-            targets must have the same shape, dtype, and device
-            as the current inputs and targets. Otherwise, any shape/dtype/device are allowed.
+        :param inputs: The new training inputs.
+        :param targets: The new training targets.
+        :param strict: If `True`, the new inputs and targets must have the same
+            shape, dtype, and device as the current inputs and targets. Otherwise,
+            any shape/dtype/device are allowed.
         """
         if inputs is not None:
             if torch.is_tensor(inputs):
@@ -150,7 +172,11 @@ class DeltaEnc(BaseModel):
         self.prediction_strategy = None
 
     def fit(self):
-        
+        """
+        Train the model. The results of this process will eventually be pulled
+        from the predictor object and the optimizer object (either an `Adam` object
+        or an `SGD` object from torch).
+        """
         if self.multi_network:
             pass
         else:
@@ -184,7 +210,13 @@ class DeltaEnc(BaseModel):
                     avg_loss += f_loss.item()/len(loader)
                 
 
-    def save_ckpt(self, path, name):
+    def save_ckpt(self, path: str, name: str):
+        """
+        Save a trained model to a checkpoint file
+
+        :param path: The path to the checkpoint file
+        :param name: The name of the checkpoint file
+        """
         state = {'epoch': self.n_epochs}
         state['state_dict'] = self.f_predictor.state_dict()
         state['B'] = self.f_predictor.B
@@ -193,13 +225,27 @@ class DeltaEnc(BaseModel):
         torch.save(state, filename)
         print('Saved Ckpts')
 
-    def load_ckpt(self, path, name):
+    def load_ckpt(self, path: str, name: str):
+        """
+        Load in a trained model from a checkpoint file
+
+        :param path: The path to the checkpoint file
+        :param name: The name of the checkpoint file
+        """
         saved_state = torch.load(os.path.join(
             path, name + '.ckpt'), map_location=self.device)
         self.f_predictor.load_state_dict(saved_state['state_dict'])
         self.f_predictor.B = saved_state['B']
 
-    def _map_delta_model(self, ref, query):
+    def _map_delta_model(self, ref: torch.Tensor, query: torch.Tensor) -> torch.Tensor:
+        """
+        Maps the delta model based on the input reference (ref) and query tensors
+
+        :param ref: The input reference tensor
+        :param query: The query tensor
+        
+        :returns: The predicted output tensor
+        """
         ref = self.f_predictor.input_mapping(ref)
         query = self.f_predictor.input_mapping(query)
         diff = query - ref
@@ -207,7 +253,23 @@ class DeltaEnc(BaseModel):
         pred = self.f_predictor(samps)
         return pred
 
-    def get_prediction_with_uncertainty(self, q,get_cov=False,original_scale=True):
+    def get_prediction_with_uncertainty(
+        self,
+        q: torch.Tensory,
+        get_cov: bool = False,
+        original_scale: bool = True
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Given a tensor calculate the prediction with uncertainty.
+
+        :param q: A tensor with data we'll calculate prediction with uncertainty for
+        :param get_cov: If True, get the covariance. Otherwise, get the variance.
+        :param original_scale: If True, apply an inverse scaling transformation to get the scaled
+            predictions back to the original scale. Otherwise, don't re-scale the predictions.
+
+        :returns: A tuple containing the mean tensor and the variance (or covariance if
+            `get_cov=True`) tensor
+        """
         orig_input_shape = q.shape
         assert q.shape[-1]==self.input_dim, 'Expected tensor to have size=input_dim ({}) in last dimension, found tensor of shape {}'.format(self.input_dim,q.shape)        
         if q.shape[-len(self.batch_shape)-2:-2]!=self.batch_shape:
@@ -262,10 +324,24 @@ class DeltaEnc(BaseModel):
         else:
             return mu, var
 
-    def fantasize(self,X,sampler,observation_noise=True,**kwargs):
+    def fantasize(self,
+        X: torch.Tensor,
+        sampler: Type[MCSampler],
+        # observation_noise: bool = True,  # TODO uncomment this if we implement it in BaseModel
+        **kwargs
+    ) -> DeltaEnc:
+        """
+        Augment the dataset and return a new model with the fantasized points.
+
+        :param X: The input tensor to augment
+        :param sampler: A botorch sampling class to apply to the posterior of the input deck
+        
+        :returns: A new `DeltaEnc` model with the augmented dataset
+        """
         propagate_grads = kwargs.pop('propagate_grads',False)
         with settings.propagate_grads(propagate_grads):
-            post_X = self.posterior(X,observation_noise=observation_noise,**kwargs)
+            # post_X = self.posterior(X,observation_noise=observation_noise,**kwargs)  # TODO uncomment this if we implement observation_noise in BaseModel
+            post_X = self.posterior(X, **kwargs)
             Y_fantasized = sampler(post_X)
                     
         Y_fantasized = Y_fantasized.detach().clone()
@@ -315,15 +391,19 @@ class DeltaEnc(BaseModel):
         return fantasy_model
 
 class DeltaEncMF(BaseModel):
+    """
+    The `DeltaEncMF` class represents the multi-fidelity Delta UQ model for neural
+    networks. This model will allow us to set the training data, fit it, and get
+    our prediciton values with uncertainty.
+    """
     def __init__(self,
-                 network,
-                 config,
-                 optimizer,
-                 X_train,
-                 y_train,
-                 target='dy',  # 'y', 'dy'
-                 ):
-
+        network,
+        config,
+        optimizer,
+        X_train,
+        y_train,
+        target='dy',  # 'y', 'dy'
+    ):
         super().__init__()
         if isinstance(network,list):
             self.multi_network = True
