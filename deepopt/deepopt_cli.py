@@ -251,7 +251,7 @@ class DeepoptConfigure:
             if ".yaml" in self.config_file:
                 self.config = yaml.safe_load(file)
             else:
-                self.config = json.load(file)
+                self.config = json.loads(file)
             # TODO: when running single fidelity with deluq, should n_epochs be set to 1000?
         manual_seed(self.random_seed)
         np.random.seed(self.random_seed)
@@ -880,7 +880,7 @@ class DeepoptConfigure:
         acq_method: str,
         model_type: str = Defaults.model_type,
         num_candidates: int = Defaults.num_candidates,
-        fidelity_cost: str = Defaults.fidelity_cost,
+        fidelity_cost: ndarray = torch.FloatTensor(json.loads(Defaults.fidelity_cost)),
         risk_measure: str = None,
         risk_level: float = None,
         risk_n_deltas: int = None,
