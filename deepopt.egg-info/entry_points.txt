@@ -1,3 +1,0 @@
-[console_scripts]
-deepopt-c = deepopt.deepopt_cli:main
-

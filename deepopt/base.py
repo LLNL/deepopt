@@ -4,7 +4,7 @@ codebase.
 """
 import os
 import numpy as np
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Tuple
 
 import torch
 from botorch.models.model import Model
@@ -108,9 +108,9 @@ class BaseModel(Model):
 
     def posterior(
         self,
-        X: tensor.Tensor,
-        posterior_transform: Optional[Callable[GPyTorchPosterior]] = None,
-        # observation_noise: Optional[bool] = False,
+        X: torch.Tensor,
+        posterior_transform: Callable[[GPyTorchPosterior], GPyTorchPosterior] = None,
+        # observation_noise: bool = False,
         **kwargs
     ) -> GPyTorchPosterior:
         """
@@ -134,7 +134,7 @@ class BaseModel(Model):
         else:
             return GPyTorchPosterior(mvn)
 
-    def forward(self, X: tensor.Tensor, **kwargs) -> MultivariateNormal:
+    def forward(self, X: torch.Tensor, **kwargs) -> MultivariateNormal:
         """
         Compute the model output at X with uncertainties, then use that to
         compute a multivariate normal.
