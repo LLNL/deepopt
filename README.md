@@ -1,6 +1,58 @@
 # Deepopt_Release
 
+## Contributing
 
+__Prerequisites:__
+
+1. Create a fork of this repository
+
+2. Clone your forked repository to your local system
+
+3. Install *all* requirements for the DeepOpt library:
+
+    ```bash
+    pip install -r requirements/requirements.txt
+    pip install -r requirements/dev.txt
+    pip install -r docs/requirements.txt
+    ```
+
+4. Initialize the [pre-commit](https://pre-commit.com/) library:
+
+    ```bash
+    pre-commit install
+    ```
+
+__Branch Naming Guide:__
+
+DeepOpt branches *must* start with one of the following names:
+
+- `feature/`: for new features
+- `bugfix/`: for bugfixes
+- `hotfix/`: for bugfixes that need to go directly into the `main` branch
+- `refactor/`: for any sort of code refactoring
+- `docs/`: for any large-scale changes to the documentation
+
+__Best Practices:__
+
+When contributing, please conform to the common docstring format used throughout the codebase.
+This helps keep the API docs up-to-date and the codebase syntactically clean.
+
+Linters will be ran after each commit, ensure there are no errors with the linters before you
+create a merge request.
+
+__Making Commits:__
+
+The [pre-commit](https://pre-commit.com/) library will be run on each commit you make. For all checks except flake8, changes
+will be made for you. If flake8 fails it will be your job to find the issue and fix it.
+
+If _any_ lint failures occur, you will have to run `git add ...` for the files that were changed
+and then re-run `git commit ...`.
+
+__Merge Requests:__
+
+When you believe you're ready for a merge request, create the merge from your forked branch
+into the `develop` branch of the DeepOpt repository. Approval will be required by one of the
+maintainers.
 
 ## Getting started
 

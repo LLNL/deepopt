@@ -5,7 +5,7 @@
 # LICENSE file in the root directory of this source tree.
 
 r"""
-!!! note 
+!!! note
     This module was adopted from the botorch library. There was a bug
     we decided to fix on our own so we didn't have to wait for them to
     adopt our changes. You can view their library
@@ -58,7 +58,6 @@ from scipy.optimize import brentq
 from scipy.stats import norm
 from torch import Tensor
 
-
 CLAMP_LB = 1.0e-8
 
 
@@ -96,9 +95,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
         super().__init__(model=model)
 
         if posterior_transform is None and model.num_outputs != 1:
-            raise UnsupportedError(
-                "Must specify a posterior transform when using a multi-output model."
-            )
+            raise UnsupportedError("Must specify a posterior transform when using a multi-output model.")
 
         # Batched GP models are not currently supported
         try:
@@ -107,15 +104,14 @@ class MaxValueBase(AcquisitionFunction, ABC):
             batch_shape = torch.Size()
         if len(batch_shape) > 0:
             raise NotImplementedError(
-                "Batched GP models (e.g., fantasized models) are not yet "
-                f"supported by `{self.__class__.__name__}`."
+                "Batched GP models (e.g., fantasized models) are not yet " f"supported by `{self.__class__.__name__}`."
             )
         self.num_mv_samples = num_mv_samples
         self.posterior_transform = posterior_transform
         self.maximize = maximize
         self.weight = 1.0 if maximize else -1.0
         self.set_X_pending(X_pending)
-        
+
     def forward(self, X: Tensor) -> Tensor:
         """
         Helper method to re-shape the tensor when requesting multiple candidate points prior to calculating
@@ -125,13 +121,12 @@ class MaxValueBase(AcquisitionFunction, ABC):
 
         :param X: A `batch_shape x q x d`-dim Tensor of `batch_shape` t-batches
             with `q` candidate points resulting in `q x d`-dim design points each.
-        
+
         :returns: A `batch_shape`-dim Tensor of MVE values at the given design points `X`.
         """
         if X.shape[-2] == 1:
             return self.q_forward(X)
-        else:
-            return self.q_forward(X.unsqueeze(-2))
+        return self.q_forward(X.unsqueeze(-2))
 
     @t_batch_mode_transform(expected_q=1)
     def q_forward(self, X: Tensor) -> Tensor:
@@ -151,9 +146,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
         # batch_shape x num_fantasies x (m) x 1
         mean = self.weight * posterior.mean.squeeze(-1).squeeze(-1)
         variance = posterior.variance.clamp_min(CLAMP_LB).view_as(mean)
-        ig = self._compute_information_gain(
-            X=X, mean_M=mean, variance_M=variance, covar_mM=variance.unsqueeze(-1)
-        )
+        ig = self._compute_information_gain(X=X, mean_M=mean, variance_M=variance, covar_mM=variance.unsqueeze(-1))
         return ig.mean(dim=0)  # average over fantasies
 
     def set_X_pending(self, X_pending: Optional[Tensor] = None) -> None:
@@ -188,9 +181,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
         pass  # pragma: no cover
 
     @abstractmethod
-    def _sample_max_values(
-        self, num_samples: int, X_pending: Optional[Tensor] = None
-    ) -> Tensor:
+    def _sample_max_values(self, num_samples: int, X_pending: Optional[Tensor] = None) -> Tensor:
         r"""Draw samples from the posterior over maximum values.
 
         These samples are used to compute Monte Carlo approximations of expecations
@@ -249,8 +240,7 @@ class DiscreteMaxValueBase(MaxValueBase):
         if train_inputs is not None:
             if train_inputs.ndim > 2:
                 raise NotImplementedError(
-                    "Batch GP models (e.g. fantasized models) "
-                    "are not yet supported by `MaxValueBase`"
+                    "Batch GP models (e.g. fantasized models) " "are not yet supported by `MaxValueBase`"
                 )
             train_inputs = match_batch_shape(train_inputs, candidate_set)
             candidate_set = torch.cat([candidate_set, train_inputs], dim=0)
@@ -265,9 +255,7 @@ class DiscreteMaxValueBase(MaxValueBase):
             X_pending=X_pending,
         )
 
-    def _sample_max_values(
-        self, num_samples: int, X_pending: Optional[Tensor] = None
-    ) -> Tensor:
+    def _sample_max_values(self, num_samples: int, X_pending: Optional[Tensor] = None) -> Tensor:
         r"""Draw samples from the posterior over maximum values on a discrete set.
 
         These samples are used to compute Monte Carlo approximations of expecations
@@ -372,8 +360,8 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
             train_inputs=train_inputs,
         )
         self._init_model = model  # used for `fantasize()` when setting `X_pending`
-        self.sampler = SobolQMCNormalSampler(num_y_samples,seed=kwargs.get('seed'))
-        self.fantasies_sampler = SobolQMCNormalSampler(num_fantasies,seed=kwargs.get('seed'))
+        self.sampler = SobolQMCNormalSampler(num_y_samples, seed=kwargs.get("seed"))
+        self.fantasies_sampler = SobolQMCNormalSampler(num_fantasies, seed=kwargs.get("seed"))
         self.num_fantasies = num_fantasies
         self.set_X_pending(X_pending)  # this did not happen in the super constructor
 
@@ -394,16 +382,12 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
             return
         if X_pending is not None:
             # fantasize the model and use this as the new model
-            self.model = init_model.fantasize(
-                X=X_pending, sampler=self.fantasies_sampler, observation_noise=True
-            )
+            self.model = init_model.fantasize(X=X_pending, sampler=self.fantasies_sampler, observation_noise=True)
         else:
             self.model = init_model
         super().set_X_pending(X_pending)
 
-    def _compute_information_gain(
-        self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor
-    ) -> Tensor:
+    def _compute_information_gain(self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor) -> Tensor:
         r"""Computes the information gain at the design points `X`.
 
         Approximately computes the information gain at the design points `X`,
@@ -535,9 +519,7 @@ class qLowerBoundMaxValueEntropy(DiscreteMaxValueBase):
         >>> candidates, _ = optimize_acqf(qGIBBON, bounds, q=5)
     """
 
-    def _compute_information_gain(
-        self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor
-    ) -> Tensor:
+    def _compute_information_gain(self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor) -> Tensor:
         r"""Compute GIBBON's approximation of information gain at the design points `X`.
 
         When using GIBBON for batch optimization (i.e `q > 1`), we calculate the
@@ -560,9 +542,7 @@ class qLowerBoundMaxValueEntropy(DiscreteMaxValueBase):
         # doing posterior computations twice
 
         # compute the mean_m, variance_m with noisy observation
-        posterior_m = self.model.posterior(
-            X, observation_noise=True, posterior_transform=self.posterior_transform
-        )
+        posterior_m = self.model.posterior(X, observation_noise=True, posterior_transform=self.posterior_transform)
         mean_m = self.weight * posterior_m.mean.squeeze(-1)
         # batch_shape x 1
         variance_m = posterior_m.variance.clamp_min(CLAMP_LB).squeeze(-1)
@@ -621,13 +601,10 @@ class qLowerBoundMaxValueEntropy(DiscreteMaxValueBase):
 
         if self.posterior_transform is not None:
             raise UnsupportedError(
-                "qLowerBoundMaxValueEntropy does not support PosteriorTransforms"
-                "when X_pending is not None."
+                "qLowerBoundMaxValueEntropy does not support PosteriorTransforms" "when X_pending is not None."
             )
 
-        X_batches = torch.cat(
-            [X, self.X_pending.unsqueeze(0).repeat(X.shape[0], 1, 1)], 1
-        )
+        X_batches = torch.cat([X, self.X_pending.unsqueeze(0).repeat(X.shape[0], 1, 1)], 1)
         # batch_shape x (1 + m) x d
         # NOTE: This is the blocker for supporting posterior transforms.
         # We would have to process this MVN, applying whatever operations
@@ -772,14 +749,14 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
 
         :param X: A `batch_shape x q x d`-dim Tensor of `batch_shape` t-batches
             with `q` candidate points resulting in `q x d`-dim design points each.
-        
+
         :returns: A `batch_shape`-dim Tensor of MVE values at the given design points `X`.
         """
         if X.shape[-2] == 1:
             return self.q_forward(X)
         else:
             return self.q_forward(X.unsqueeze(-2))
-        
+
     @t_batch_mode_transform(expected_q=1)
     def q_forward(self, X: Tensor) -> Tensor:
         r"""Evaluates `qMultifidelityMaxValueEntropy` at the design points `X`
@@ -796,9 +773,7 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
 
         # Compute the posterior, posterior mean, variance without noise
         # `_m` and `_M` in the var names means the current and the max fidelity.
-        posterior = self.model.posterior(
-            X_all, observation_noise=False, posterior_transform=self.posterior_transform
-        )
+        posterior = self.model.posterior(X_all, observation_noise=False, posterior_transform=self.posterior_transform)
         mean_M = self.weight * posterior.mean[..., -1, 0]  # batch_shape x num_fantasies
         variance_M = posterior.variance[..., -1, 0].clamp_min(CLAMP_LB)
         # get the covariance between the low fidelities and max fidelity
@@ -810,9 +785,7 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
         check_no_nans(covar_mM)
 
         # compute the information gain (IG)
-        ig = self._compute_information_gain(
-            X=X_expand, mean_M=mean_M, variance_M=variance_M, covar_mM=covar_mM
-        )
+        ig = self._compute_information_gain(X=X_expand, mean_M=mean_M, variance_M=variance_M, covar_mM=covar_mM)
         ig = self.cost_aware_utility(X=X, deltas=ig, sampler=self.cost_sampler)
         return ig.mean(dim=0)  # average over the fantasies
 
@@ -840,9 +813,7 @@ class qMultiFidelityLowerBoundMaxValueEntropy(qMultiFidelityMaxValueEntropy):
         >>> mf_gibbon = MF_qGIBBON(test_X)
     """
 
-    def _compute_information_gain(
-        self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor
-    ) -> Tensor:
+    def _compute_information_gain(self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor) -> Tensor:
         r"""Compute GIBBON's approximation of information gain at the design points `X`.
 
         When using GIBBON for batch optimization (i.e `q > 1`), we calculate the
@@ -943,10 +914,7 @@ def _sample_max_value_Gumbel(
         lo_, hi_ = lo[i], hi[i]
         N = norm(mu[:, i].cpu().numpy(), sigma[:, i].cpu().numpy())
         quantiles[i, :] = torch.tensor(
-            [
-                brentq(lambda y: np.exp(np.sum(N.logcdf(y))) - p, lo_, hi_)
-                for p in [0.25, 0.50, 0.75]
-            ]
+            [brentq(lambda y: np.exp(np.sum(N.logcdf(y))) - p, lo_, hi_) for p in [0.25, 0.50, 0.75]]
         )
     q25, q50, q75 = quantiles[:, 0], quantiles[:, 1], quantiles[:, 2]
     # q25, q50, q75 are 1 dimensional tensor with size of either 1 or num_fantasies

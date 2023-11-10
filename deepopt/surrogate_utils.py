@@ -2,23 +2,20 @@
 This module contains the neural network modules used throughout
 DeepOpt. This includes MLP and SIREN neural networks.
 """
+from math import cos, pi
+from typing import Any, Dict, Type, Union
+
 import numpy as np
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torchvision.models as models
-
-from collections import OrderedDict
-from typing import Any, Dict, Type, Union
-from math import pi
-from math import cos
-from torch.optim import Adam, SGD
+from torch import nn
+from torch.optim import SGD, Adam
 
 
 class MLPLayer(nn.Module):
     """
     A class representation for a layer of an MLP neural network.
     """
+
     def __init__(
         self,
         activation: str,
@@ -28,7 +25,7 @@ class MLPLayer(nn.Module):
         dop: float = 0.3,
         bn: bool = True,
         is_first: bool = False,
-        is_last: bool = False
+        is_last: bool = False,
     ):
         """
         Create a layer of the MLP neural network.
@@ -52,11 +49,11 @@ class MLPLayer(nn.Module):
         self.is_first = is_first
         self.is_last = is_last
 
-        if activation == 'relu':
+        if activation == "relu":
             self.activation_fn = nn.ReLU()
-        elif activation == 'tanh':
+        elif activation == "tanh":
             self.activation_fn = nn.Tanh()
-        elif activation == 'identity':
+        elif activation == "identity":
             self.activation_fn = nn.Identity()
         else:
             raise NotImplementedError("Only 'relu', 'tanh' and 'identity' activations are supported")
@@ -77,25 +74,27 @@ class MLPLayer(nn.Module):
         x = self.activation_fn(self.linear(x))
         if self.is_first or self.is_last:
             return x
-        else:
-            if self.bn:
-                x = self.batchnorm(x)
-            if self.do:
-                x = self.dropout(x)
-            return x
+
+        if self.bn:
+            x = self.batchnorm(x)
+        if self.do:
+            x = self.dropout(x)
+        return x
+
 
 class MLP(nn.Module):
     """
     Multi-Layer Perceptron (MLP) neural network module.
     This uses a nonlinear activation function to train a model.
     """
+
     def __init__(
         self,
         config: Dict[str, Any],
         unc_type: str,
         input_dim: int,
         output_dim: int,
-        device: str = 'cpu'
+        device: str = "cpu",
     ):
         """
         Create an MLP neural network
@@ -107,37 +106,70 @@ class MLP(nn.Module):
         :param device: Which device to run the neural network on.
             Options: 'cpu' or 'gpu'.
         """
-        super(MLP, self).__init__()
+        super().__init__()
         self.config = config
         self.unc_type = unc_type
         self.device = device
 
-        if self.config['ff']:
-            scale = np.sqrt(self.config['variance'])#/(input_dim-1)
-            if self.config['dist'] == 'uniform':
+        if self.config["ff"]:
+            scale = np.sqrt(self.config["variance"])  # /(input_dim-1)
+            if self.config["dist"] == "uniform":
                 mn = -scale
                 mx = scale
-                self.B = torch.rand((self.config['mapping_size'], input_dim)) * (mx - mn) + mn
-            elif self.config['dist'] == 'gaussian':
-                self.B = torch.randn((self.config['mapping_size'], input_dim)) * scale
-            elif self.config['dist'] == 'laplace':
-                rp = np.random.laplace(loc=0., scale =scale, size = (self.config['mapping_size'], input_dim))
+                self.B = torch.rand((self.config["mapping_size"], input_dim)) * (mx - mn) + mn
+            elif self.config["dist"] == "gaussian":
+                self.B = torch.randn((self.config["mapping_size"], input_dim)) * scale
+            elif self.config["dist"] == "laplace":
+                rp = np.random.laplace(loc=0.0, scale=scale, size=(self.config["mapping_size"], input_dim))
                 self.B = torch.from_numpy(rp).float()
             self.B = self.B.to(device)
-            if self.unc_type == 'deltaenc':
-                first_layer_dim = self.config['mapping_size']*4
+            if self.unc_type == "deltaenc":
+                first_layer_dim = self.config["mapping_size"] * 4
             else:
-                first_layer_dim = self.config['mapping_size']*2
+                first_layer_dim = self.config["mapping_size"] * 2
         else:
             self.B = None
-            if self.unc_type == 'deltaenc':
-                first_layer_dim = 2*input_dim
-                
-        layers = [MLPLayer(self.config['activation'], first_layer_dim, self.config['hidden_dim'], do=False, dop=0.0, bn=False, is_first=True, is_last=False)]
+            if self.unc_type == "deltaenc":
+                first_layer_dim = 2 * input_dim
 
-        for i in range(1, self.config['n_layers'] - 1):
-            layers.append(MLPLayer(self.config['activation'], self.config['hidden_dim'], self.config['hidden_dim'], do=self.config['dropout'], dop=self.config['dropout_prob'], bn=self.config['batchnorm'], is_first=False, is_last=False))
-        layers.append(MLPLayer('identity', self.config['hidden_dim'], output_dim, do=False, dop=0.0, bn=False, is_first=False, is_last=True))
+        layers = [
+            MLPLayer(
+                self.config["activation"],
+                first_layer_dim,
+                self.config["hidden_dim"],
+                do=False,
+                dop=0.0,
+                bn=False,
+                is_first=True,
+                is_last=False,
+            )
+        ]
+
+        for _ in range(1, self.config["n_layers"] - 1):
+            layers.append(
+                MLPLayer(
+                    self.config["activation"],
+                    self.config["hidden_dim"],
+                    self.config["hidden_dim"],
+                    do=self.config["dropout"],
+                    dop=self.config["dropout_prob"],
+                    bn=self.config["batchnorm"],
+                    is_first=False,
+                    is_last=False,
+                )
+            )
+        layers.append(
+            MLPLayer(
+                "identity",
+                self.config["hidden_dim"],
+                output_dim,
+                do=False,
+                dop=0.0,
+                bn=False,
+                is_first=False,
+                is_last=True,
+            )
+        )
 
         self.mlp = nn.Sequential(*layers).to(device)
 
@@ -152,9 +184,9 @@ class MLP(nn.Module):
         """
         if self.B is None:
             return x.to(self.device)
-        else:
-            x_proj = (2. * np.pi * x).float().to(self.device) @ self.B.t() 
-            return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
+        x_proj = (2.0 * np.pi * x).float().to(self.device) @ self.B.t()
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -164,17 +196,19 @@ class MLP(nn.Module):
 
         :returns: The output tensor computed from the forward pass
         """
-        if self.unc_type == 'deltaenc':
+        if self.unc_type == "deltaenc":
             out = self.mlp(x.to(self.device))
         else:
             h = self.input_mapping(x.to(self.device))
             out = self.mlp(h)
         return out
 
+
 class SirenLayer(nn.Module):
     """
     A class representation for a layer of a SIREN neural network.
     """
+
     def __init__(
         self,
         in_f: int,
@@ -184,7 +218,7 @@ class SirenLayer(nn.Module):
         bn: bool = True,
         w0: int = 30,
         is_first: bool = False,
-        is_last: bool = False
+        is_last: bool = False,
     ):
         """
         Create a layer of the SIREN neural network.
@@ -219,8 +253,7 @@ class SirenLayer(nn.Module):
         """
         Initialize the weights for this layer
         """
-        b = 1 / \
-            self.in_f if self.is_first else np.sqrt(6 / self.in_f) / self.w0
+        b = 1 / self.in_f if self.is_first else np.sqrt(6 / self.in_f) / self.w0
         with torch.no_grad():
             self.linear.weight.uniform_(-b, b)
 
@@ -232,31 +265,33 @@ class SirenLayer(nn.Module):
 
         :returns: The output tensor for this layer
         """
-        #x = self.linear(x)
-        #return x if self.is_last else torch.sin(self.w0 * x)
+        # x = self.linear(x)
+        # return x if self.is_last else torch.sin(self.w0 * x)
         x = self.linear(x)
         if self.is_last:
             return x
-        else:
-            x = torch.sin(self.w0 * x)
-            if self.do:
-                x = self.dropout(x)
-            if self.bn:
-                x = self.batchnorm(x)
-            return x
+
+        x = torch.sin(self.w0 * x)
+        if self.do:
+            x = self.dropout(x)
+        if self.bn:
+            x = self.batchnorm(x)
+        return x
+
 
 class SIREN(nn.Module):
     """
     Sinusoidal Representation Networks (SIREN) neural network module.
     This uses a sinusoidal activation function to train a model.
     """
+
     def __init__(
         self,
         config: Dict[str, Any],
         unc_type: str,
         input_dim: int,
         output_dim: int,
-        device: str = 'cpu'
+        device: str = "cpu",
     ):
         """
         Create a SIREN neural network
@@ -268,36 +303,62 @@ class SIREN(nn.Module):
         :param device: Which device to run the neural network on.
             Options: 'cpu' or 'gpu'.
         """
-        super(SIREN, self).__init__()
+        super().__init__()
 
         self.config = config
         self.unc_type = unc_type
 
-        if self.config['siren_ff']:
-            scale = np.sqrt(self.config['variance'])
-            if self.config['dist'] == 'uniform':
+        if self.config["siren_ff"]:
+            scale = np.sqrt(self.config["variance"])
+            if self.config["dist"] == "uniform":
                 mn = -scale
                 mx = scale
-                self.B = torch.rand((self.config['mapping_size'], input_dim)) * (mx - mn) + mn
-            elif self.config['dist'] == 'gaussian':
-                self.B = torch.randn((self.config['mapping_size'], input_dim)) * scale
-            elif self.config['dist'] == 'laplace':
-                rp = np.random.laplace(loc=0., scale =scale, size = (self.config['mapping_size'], input_dim))
+                self.B = torch.rand((self.config["mapping_size"], input_dim)) * (mx - mn) + mn
+            elif self.config["dist"] == "gaussian":
+                self.B = torch.randn((self.config["mapping_size"], input_dim)) * scale
+            elif self.config["dist"] == "laplace":
+                rp = np.random.laplace(loc=0.0, scale=scale, size=(self.config["mapping_size"], input_dim))
                 self.B = torch.from_numpy(rp).float()
             self.B = self.B.to(device)
-            if self.unc_type == 'deltaenc':
-                input_dim = self.config['mapping_size']*4
+            if self.unc_type == "deltaenc":
+                input_dim = self.config["mapping_size"] * 4
             else:
-                input_dim = self.config['mapping_size']*2
+                input_dim = self.config["mapping_size"] * 2
         else:
             self.B = None
-            if self.unc_type == 'deltaenc':
-                input_dim*=2
+            if self.unc_type == "deltaenc":
+                input_dim *= 2
 
-        layers = [SirenLayer(input_dim, self.config['hidden_dim'], do=self.config['dropout'], dop=self.config['dropout_prob'], bn=self.config['batchnorm'], is_first=True)]
-        for i in range(1, self.config['n_layers'] - 1):
-            layers.append(SirenLayer(self.config['hidden_dim'], self.config['hidden_dim'], do=self.config['dropout'], dop=self.config['dropout_prob'], bn=self.config['batchnorm']))
-        layers.append(SirenLayer(self.config['hidden_dim'], output_dim, do=self.config['dropout'], dop=self.config['dropout_prob'], bn=self.config['batchnorm'], is_last=True))
+        layers = [
+            SirenLayer(
+                input_dim,
+                self.config["hidden_dim"],
+                do=self.config["dropout"],
+                dop=self.config["dropout_prob"],
+                bn=self.config["batchnorm"],
+                is_first=True,
+            )
+        ]
+        for _ in range(1, self.config["n_layers"] - 1):
+            layers.append(
+                SirenLayer(
+                    self.config["hidden_dim"],
+                    self.config["hidden_dim"],
+                    do=self.config["dropout"],
+                    dop=self.config["dropout_prob"],
+                    bn=self.config["batchnorm"],
+                )
+            )
+        layers.append(
+            SirenLayer(
+                self.config["hidden_dim"],
+                output_dim,
+                do=self.config["dropout"],
+                dop=self.config["dropout_prob"],
+                bn=self.config["batchnorm"],
+                is_last=True,
+            )
+        )
         self.siren = nn.Sequential(*layers)
 
     def input_mapping(self, x: torch.Tensor) -> torch.Tensor:
@@ -311,9 +372,9 @@ class SIREN(nn.Module):
         """
         if self.B is None:
             return x
-        else:
-            x_proj = (2. * np.pi * x).float() @ self.B.t()
-            return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
+        x_proj = (2.0 * np.pi * x).float() @ self.B.t()
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -323,12 +384,13 @@ class SIREN(nn.Module):
 
         :returns: The output tensor computed from the forward pass
         """
-        if self.unc_type == 'deltaenc':
+        if self.unc_type == "deltaenc":
             out = self.siren(x)
         else:
             h = self.input_mapping(x)
             out = self.siren(h)
         return out
+
 
 def create_optimizer(network: Type[nn.Module], config: Dict[str, Any]) -> Union[Adam, SGD]:
     """
@@ -337,11 +399,19 @@ def create_optimizer(network: Type[nn.Module], config: Dict[str, Any]) -> Union[
     :param network: The input neural network
     :param config: The configuration options provided by the user
     """
-    if config['opt_type'] == 'Adam':
-        optimizer = Adam(network.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay_factor'] if config['weight_decay'] else 0.0)
+    if config["opt_type"] == "Adam":
+        optimizer = Adam(
+            network.parameters(),
+            lr=config["learning_rate"],
+            weight_decay=config["weight_decay_factor"] if config["weight_decay"] else 0.0,
+        )
 
-    elif config['opt_type'] == 'SGD':
-        optimizer = SGD(network.parameters(), lr=config['learning_rate'], weight_decay=config['weight_decay_factor'] if config['weight_decay'] else 0.0)
+    elif config["opt_type"] == "SGD":
+        optimizer = SGD(
+            network.parameters(),
+            lr=config["learning_rate"],
+            weight_decay=config["weight_decay_factor"] if config["weight_decay"] else 0.0,
+        )
 
     else:
         raise NotImplementedError("Only Adam and SGD optimizers supported as of now")
@@ -353,18 +423,19 @@ def proposed_lr(config, epoch, epoch_per_cycle):
     # Cosine Annealing Learning Rate Update
     # https://github.com/moskomule/pytorch.snapshot.ensembles/blob/master/se.py
     iteration = int(epoch % epoch_per_cycle)
-    return config['learning_rate'] * (cos(pi * iteration / epoch_per_cycle) + 1) / 2
+    return config["learning_rate"] * (cos(pi * iteration / epoch_per_cycle) + 1) / 2
+
 
 def prepare_cut_mix_batch(config, input, target):
     # Generate Mixed Sample
     # https://github.com/clovaai/CutMix-PyTorch/blob/master/train.py
-    lam = np.random.beta(config['beta'], config['beta'])
+    lam = np.random.beta(config["beta"], config["beta"])
     rand_index = torch.randperm(input.size()[0])
     target_a = target
     target_b = target[rand_index]
 
-    num_dim_mixed = np.random.randint(input.size()[1]//2)
+    num_dim_mixed = np.random.randint(input.size()[1] // 2)
     mix_dim = torch.LongTensor(np.random.choice(range(input.size()[1]), num_dim_mixed))
 
-    input[:, mix_dim] = input[(rand_index),:][:,(mix_dim)]
+    input[:, mix_dim] = input[(rand_index), :][:, (mix_dim)]
     return input, target_a, target_b, lam

@@ -12,4 +12,3 @@ scipy
 click
 pyyaml
 psutil
-
