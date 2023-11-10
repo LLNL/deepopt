@@ -44,22 +44,9 @@ from torch.utils.data import DataLoader, TensorDataset, SubsetRandomSampler
 from types import SimpleNamespace
 from typing import Dict, Any, Union, Type, List, Mapping, Optional, Tuple
 
-
-DEVELOP = False
-DEEPOPT_PATH = ""
-
-
-def set_deepopt_path():
-    """
-    Set the deepopt path if necessary. This will set the deepopt path
-    provided with the `--develop` flag as your path to the deepopt library.
-    """
-    if DEVELOP:
-        import sys
-        sys.path.insert(0, DEEPOPT_PATH)
-
-        import deepopt
-        print(f"Sourcing deepopt from {deepopt.__file__}.")
+from deepopt.acquisition import qMultiFidelityMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy
+from deepopt.deltaenc import DeltaEnc
+from deepopt.surrogate_utils import MLP as Arch, create_optimizer
 
 
 class FidelityCostModel(DeterministicModel):
@@ -179,8 +166,8 @@ class DeepoptConfigure:
     The heart of the DeepOpt library.
 
     This class handles training the dataset, loading the model, and
-    obtaining the candidates. Both the `deepopt-c learn` and the
-    `deepopt-c optimize` calls will go through this class to handle
+    obtaining the candidates. Both the `deepopt learn` and the
+    `deepopt optimize` calls will go through this class to handle
     their processing.
 
     :cvar data_file: A .npz or .npy file containing the data to use as input
@@ -282,12 +269,6 @@ class DeepoptConfigure:
 
         :returns: A dictionary representing the score.
         """
-        set_deepopt_path()
-        from deepopt.surrogate_utils import MLP as Arch
-        from deepopt.surrogate_utils import create_optimizer
-        from deepopt.deltaenc import DeltaEnc
-        
-
         self.config['variance'] = ray_config["variance"]  # (2**-3)**2
         self.config['learning_rate'] = ray_config["learning_rate"]  # 0.01
         
@@ -391,11 +372,6 @@ class DeepoptConfigure:
         """
 
         print("Training DelUQ Surrogate.")
-        set_deepopt_path()
-        from deepopt.surrogate_utils import MLP as Arch
-        from deepopt.surrogate_utils import create_optimizer
-        from deepopt.deltaenc import DeltaEnc
-
 
         warnings.filterwarnings("ignore", category=UserWarning)
         cpu_count = max(4,psutil.cpu_count(logical=False)-3)
@@ -513,12 +489,6 @@ class DeepoptConfigure:
         
         :returns: A 'DeltaEnc' model.
         """
-
-        set_deepopt_path()
-        from deepopt.surrogate_utils import MLP as Arch
-        from deepopt.surrogate_utils import create_optimizer
-        from deepopt.deltaenc import DeltaEnc
-    
         net = Arch(config=self.config, unc_type='deltaenc', input_dim=self.input_dim, output_dim=self.output_dim, device=self.device)
         opt = create_optimizer(net, self.config)
 
@@ -599,7 +569,7 @@ class DeepoptConfigure:
             in Default)
         :param fidelity_cost: A list of how expensive each fidelity should be seen as
         :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
-            be determined by the `risk_measure` argument given by the user to the `deepopt-c optimize`
+            be determined by the `risk_measure` argument given by the user to the `deepopt optimize`
             command.
         :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
         :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
@@ -608,10 +578,6 @@ class DeepoptConfigure:
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
         """
-
-        set_deepopt_path()
-        from deepopt.acquisition import qMultiFidelityMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy
-        
         bounds = torch.FloatTensor(self.input_dim*[[0,1]]).T
         bounds[1,-1] = self.num_fidelities-1
         
@@ -712,7 +678,7 @@ class DeepoptConfigure:
         :param q: The number of candidates provided by the user (or the default value assigned
             in Default)
         :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
-            be determined by the `risk_measure` argument given by the user to the `deepopt-c optimize`
+            be determined by the `risk_measure` argument given by the user to the `deepopt optimize`
             command.
         :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
         :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
@@ -721,10 +687,6 @@ class DeepoptConfigure:
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
         """
-        
-        set_deepopt_path()
-        from deepopt.acquisition import qMaxValueEntropy, qLowerBoundMaxValueEntropy
-        
         bounds = torch.FloatTensor(self.input_dim*[[0,1]]).T
         
         if acq_method == "EI":
@@ -788,7 +750,7 @@ class DeepoptConfigure:
         :param q: The number of candidates provided by the user (or the default value assigned
             in Default)
         :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
-            be determined by the `risk_measure` argument given by the user to the `deepopt-c optimize`
+            be determined by the `risk_measure` argument given by the user to the `deepopt optimize`
             command.
         :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
         :param fidelity_cost: A list of how expensive each fidelity should be seen as
@@ -854,7 +816,7 @@ class DeepoptConfigure:
     
     def learn(self, outfile: str, model_type: str = Defaults.model_type) -> None:
         """
-        The method to process the `deepopt-c learn` command.
+        The method to process the `deepopt learn` command.
 
         Here we'll train a model on our dataset and save the model to a checkpoint file.
 
@@ -888,7 +850,7 @@ class DeepoptConfigure:
         x_stddev: str = None
     ) -> None:
         """
-        The function to process the `deepopt-c optimize` command.
+        The function to process the `deepopt optimize` command.
 
         Here we'll use the model created by `learn` to produce new simulation points.
 
@@ -951,16 +913,10 @@ class DeepoptConfigure:
         np.save(outfile, candidates_npy)
 
 @click.group()
-@click.option("--develop", help="If developing package, pass in path to your development repo. [example: --develop /usr/workspace/tran67/deepopt]", type=click.Path(exists=True), required=False)
-def deepopt_cli(develop):
+def deepopt_cli():
     """
-    The entrypoint to the DeepOpt library.
+    A simple and easy-to-use library for performing Bayesian optimization.
     """
-    if develop:
-        global DEEPOPT_PATH, DEVELOP
-        DEEPOPT_PATH = develop
-        DEVELOP = True
-        set_deepopt_path()
     
 @deepopt_cli.command()
 @click.option("-i", "--infile", help="Input data to train from.", type=click.Path(exists=True), required=True)

@@ -63,7 +63,7 @@ setup(
     python_requires=">=3.8",
     entry_points={
         'console_scripts': [
-            'deepopt-c = deepopt.deepopt_cli:main',
+            'deepopt = deepopt.deepopt_cli:main',
         ]
     },
     version=version,
