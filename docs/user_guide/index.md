@@ -15,7 +15,7 @@ The DeepOpt library comes equipped with two cornerstone commands:
 ## Getting Started with DeepOpt
 
 Choose an objective function and "simulate" some initial data
-    
+
 ```python
 import torch
 import numpy as np
@@ -39,7 +39,7 @@ dc = DeepoptConfigure(data_file='sims.npz', bounds=bounds)
 ```
 
 Train a GP surrogate on the data
-    
+
 ```python
 dc.learn(outfile='learner_GP.ckpt', model_type='GP')
 ```
