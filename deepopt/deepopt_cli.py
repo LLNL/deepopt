@@ -183,11 +183,11 @@ class DeepoptConfigure:
     `deepopt-c optimize` calls will go through this class to handle
     their processing.
 
-    :cvar config_file: A YAML file with configuration values to use throughout the
-        learn/optimize processes.
     :cvar data_file: A .npz or .npy file containing the data to use as input
+    :cvar bounds: Reasonable limits on where to do your optimization search    
+    :cvar config_file: A YAML file with neural network configuration values to use throughout the
+        learn/optimize processes (not used with GP).    
     :cvar random_seed: The random seed to use when training and optimizing
-    :cvar bounds: Reasonable limits on where to do your optimization search
     :cvar multi_fidelity: True if we're doing a multi-fidelity run, False otherwise
     :cvar num_fidelities: The number of fidelities to use if we're doing a
         multi-fidelity run. `Default: None`
@@ -209,9 +209,9 @@ class DeepoptConfigure:
         saved in a dict format since it's necessary for BoTorch. `Default: None`
     """
 
-    config_file: str
     data_file: str
     bounds: ndarray
+    config_file: str = None    
     random_seed: int = Defaults.random_seed
     multi_fidelity: bool = Defaults.multi_fidelity
     num_fidelities: int = None
@@ -246,13 +246,14 @@ class DeepoptConfigure:
         self.output_dim = self.full_train_Y.shape[-1]
         assert self.output_dim==1, "Multi-output models not currently supported."
         self.target_fidelities = {self.input_dim-1: self.num_fidelities-1}
-    
-        with open(self.config_file, "r") as file:
-            if ".yaml" in self.config_file:
-                self.config = yaml.safe_load(file)
-            else:
-                self.config = json.loads(file)
-            # TODO: when running single fidelity with deluq, should n_epochs be set to 1000?
+
+        if self.config_file is not None:
+            with open(self.config_file, "r") as file:
+                if ".yaml" in self.config_file:
+                    self.config = yaml.safe_load(file)
+                else:
+                    self.config = json.loads(file)
+                # TODO: when running single fidelity with deluq, should n_epochs be set to 1000?
         manual_seed(self.random_seed)
         np.random.seed(self.random_seed)
         random.seed(self.random_seed)
@@ -964,7 +965,7 @@ def deepopt_cli(develop):
 @deepopt_cli.command()
 @click.option("-i", "--infile", help="Input data to train from.", type=click.Path(exists=True), required=True)
 @click.option("-o", "--outfile", help="Outfile to save model checkpoint.", type=click.STRING, required=True)
-@click.option("-c", "--config-file", help="Config file containing hyper parameters.", type=click.Path(exists=True), required=True)
+@click.option("-c", "--config-file", help="Config file containing hyper parameters.", type=click.Path(exists=True), cls=ConditionalOption, depends_on="model_type", equal_to="delUQ")
 @click.option("-b","--bounds", help="Bounds for each input dimension.", type=click.STRING, required=True)
 @click.option("-r", "--random-seed", help="Random seed.", default=Defaults.random_seed, show_default=True, type=click.INT)
 @click.option("-k", "--k-folds", help="Number of k-folds.", default=Defaults.k_folds, show_default=True, type=click.INT)
@@ -982,7 +983,7 @@ def learn(infile, outfile, config_file, bounds, random_seed, k_folds, model_type
 @deepopt_cli.command()
 @click.option("-i", "--infile", help="Training data path.", type=click.Path(exists=True), required=True)
 @click.option("-o", "--outfile", help="Where to place the suggested candidates.", type=click.STRING, required=True)
-@click.option("-c", "--config-file", help="Config file containing hyper parameters.", type=click.Path(exists=True), required=True)
+@click.option("-c", "--config-file", help="Config file containing hyper parameters.", type=click.Path(exists=True), cls=ConditionalOption, depends_on="model_type", equal_to="delUQ")
 @click.option("-l", "--learner-file", help="Learner path. Ex: /learners/my_learner.ckpt", type=click.Path(exists=True), required=True)
 @click.option("-b", "--bounds", help="Bounds for each input dimension.", type=click.STRING, required=True)
 @click.option("-a", "--acq-method", 
