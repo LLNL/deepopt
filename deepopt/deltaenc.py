@@ -4,7 +4,8 @@ neural networks.
 """
 import os
 import warnings
-from typing import Any, Callable, Dict, Tuple, Type, Union
+from copy import copy
+from typing import Any, Callable, Tuple, Type, Union
 
 import numpy as np
 import torch
@@ -17,6 +18,7 @@ from torch import nn
 from torch.optim import SGD, Adam
 from torch.utils.data import DataLoader, TensorDataset
 
+from deepopt.configuration import ConfigSettings
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
@@ -33,7 +35,7 @@ class DeltaEnc(Model):
     def __init__(
         self,
         network: Arch,
-        config: Dict[str, Any],
+        config: ConfigSettings,
         optimizer: Union[Adam, SGD],
         X_train: np.ndarray,
         y_train: np.ndarray,
@@ -54,12 +56,12 @@ class DeltaEnc(Model):
         super().__init__()
         if isinstance(network, list):
             self.multi_network = True
-            self.n_epochs = [cf["n_epochs"] for cf in config]
-            self.actual_batch_size = [min(cf["batch_size"], len(X_train)) for cf in config]
+            self.n_epochs = [cf.get_setting("n_epochs") for cf in config]
+            self.actual_batch_size = [min(cf.get_setting("batch_size"), len(X_train)) for cf in config]
         else:
             self.multi_network = False
-            self.n_epochs = config["n_epochs"]
-            self.actual_batch_size = min(config["batch_size"], len(X_train))
+            self.n_epochs = config.get_setting("n_epochs")
+            self.actual_batch_size = min(config.get_setting("batch_size"), len(X_train))
 
         self.f_predictor = network
         self.f_optimizer = optimizer
@@ -502,8 +504,10 @@ class DeltaEnc(Model):
         in_size = X_train.moveaxis(-2, 0).reshape(X_train.shape[-2], -1).shape[-1]
         out_size = Y_train.moveaxis(-2, 0).reshape(Y_train.shape[-2], -1).shape[-1]
 
-        config_fantasy = {key: self.config[key] for key in self.config}
-        config_fantasy["n_epochs"] = 20
+        config_fantasy = copy(self.config)
+        config_fantasy.set_setting("n_epochs", 20)
+        # config_fantasy = {key: self.config[key] for key in self.config}
+        # config_fantasy["n_epochs"] = 20
 
         with torch.enable_grad():
             network = Arch(
