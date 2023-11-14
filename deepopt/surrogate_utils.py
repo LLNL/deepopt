@@ -3,12 +3,14 @@ This module contains the neural network modules used throughout
 DeepOpt. This includes MLP and SIREN neural networks.
 """
 from math import cos, pi
-from typing import Any, Dict, Type, Union
+from typing import Type, Union
 
 import numpy as np
 import torch
 from torch import nn
 from torch.optim import SGD, Adam
+
+from deepopt.configuration import ConfigSettings
 
 
 class MLPLayer(nn.Module):
@@ -16,71 +18,51 @@ class MLPLayer(nn.Module):
     A class representation for a layer of an MLP neural network.
     """
 
-    def __init__(
-        self,
-        activation: str,
-        input_dim: int,
-        output_dim: int,
-        do: bool = True,
-        dop: float = 0.3,
-        bn: bool = True,
-        w0: int = 30,
-        activation_first: bool = True,
-        is_first: bool = False,
-        is_last: bool = False,
-    ):
+    def __init__(self, config: ConfigSettings, input_dim: int, output_dim: int, is_first: bool, is_last: bool):
         """
         Create a layer of the MLP neural network.
 
-        :param activation: The type of activation function to apply to this layer
+        :param config: Configuration settings provided by the user
         :param input_dim: The size of the input sample
         :param output_dim: The size of the output sample
-        :param do: If True, apply a dropout technique to this layer. Otherwise, don't.
-        :param dop: The probability of an element to be dropped out. This will only be applied
-            if `do=True`.
-        :param bn: If True, apply a batch normalization over the input. Otherwise, don't.
-        :param w0: Weight upscaling for first layer of SIREN network (only used if activation='siren')
-        :param activation_first: Whether to apply activation before (if True) or after (if False) dropout
-        :param is_first: If True, this is the first layer in our MLP network. Weights in a SIREN network are initialized differently in first layer.
+        :param is_first: If True, this is the first layer in our MLP network.
+            Weights in a SIREN network are initialized differently in first layer.
         :param is_last: If True, this is the last layer in our MLP network so don't apply any dropout,
             batch normalization, or activation.
         """
         super().__init__()
 
+        self.config = config
         self.input_dim = input_dim
         self.output_dim = output_dim
-        self.do = do
-        self.bn = bn
         self.is_first = is_first
         self.is_last = is_last
-        
+
         self.linear = nn.Linear(input_dim, output_dim)
 
-        self.dropout = nn.Dropout(dop)
-        self.batchnorm = nn.BatchNorm1d(output_dim)
-        
-        self.activation = activation
-        self.activation_first = activation_first
+        # Grab the weight (only used for SIREN)
+        self.w0 = self.config.get_setting("w0")
 
-        if activation == "relu":
-            self.activation_fn = nn.ReLU()
-        elif activation == "tanh":
-            self.activation_fn = nn.Tanh()
-        elif activation == "identity":
-            self.activation_fn = nn.Identity()
-        elif activation == 'siren':
-            self.w0 = w0
-            self.activation_fn = lambda x: torch.sin(self.w0*x)
+        # Set the activation function
+        activation_mapper = {
+            "relu": nn.ReLU(),
+            "tanh": nn.Tanh(),
+            "identity": nn.Identity(),
+            "siren": lambda x: torch.sin(self.w0 * x),
+        }
+        self.activation = self.config.get_setting("activation")
+        try:
+            self.activation_fn = activation_mapper[self.activation]
+        except KeyError as exc:
+            raise NotImplementedError(f"The only activations that are supported are {activation_mapper.keys()}") from exc
+        if self.activation == "siren":
             self.init_weights()
-        else:
-            raise NotImplementedError("Only 'relu', 'tanh', 'siren', and 'identity' activations are supported")
-        
+
     def init_weights(self):
         """
         Initialize the weights for this layer
         """
-        b = 1 / \
-            self.input_dim if self.is_first else np.sqrt(6 / self.input_dim) / self.w0
+        b = 1 / self.input_dim if self.is_first else np.sqrt(6 / self.input_dim) / self.w0
         with torch.no_grad():
             self.linear.weight.uniform_(-b, b)
 
@@ -92,18 +74,35 @@ class MLPLayer(nn.Module):
 
         :returns: The output tensor for this layer
         """
+        # Apply linear transformation
         x = self.linear(x)
+
+        # If this is the last layer, don't apply activation, batchnorm, or dropout
         if self.is_last:
-            return self.w0*x if self.activation=='siren' else x
-        else:
-            if self.do and not self.activation_first:
-                x = self.dropout(x)
-            x = self.activation_fn(x)
-            if self.bn:
-                x = self.batchnorm(x)
-            if self.do and self.activation_first:
-                x = self.dropout(x)
-            return x
+            return self.w0 * x if self.activation == "siren" else x
+
+        # Grab the activation and dropout settings
+        activation_first = self.config.get_setting("activation_first")
+        dropout_setting = self.config.get_setting("dropout")
+        dropout_fn = nn.Dropout(self.config.get_setting("dropout_prob"))
+
+        # Apply the dropout first if we're not doing activation first
+        if dropout_setting and not activation_first:
+            x = dropout_fn(x)
+
+        # Apply the activation function
+        x = self.activation_fn(x)
+
+        # Apply batchnorm if necessary
+        if self.config.get_setting("batchnorm"):
+            x = nn.BatchNorm1d(self.output_dim)(x)
+
+        # Apply the dropout last if we're doing activation first
+        if dropout_setting and activation_first:
+            x = dropout_fn(x)
+
+        return x
+
 
 class MLP(nn.Module):
     """
@@ -113,7 +112,7 @@ class MLP(nn.Module):
 
     def __init__(
         self,
-        config: Dict[str, Any],
+        config: ConfigSettings,
         unc_type: str,
         input_dim: int,
         output_dim: int,
@@ -134,48 +133,46 @@ class MLP(nn.Module):
         self.unc_type = unc_type
         self.device = device
 
-        if self.config["ff"]:
-            scale = np.sqrt(self.config["variance"])  # /(input_dim-1)
-            if self.config["dist"] == "uniform":
+        if self.config.get_setting("ff"):
+            scale = np.sqrt(self.config.get_setting("variance"))  # /(input_dim-1)
+            dist = self.config.get_setting("dist")
+            mapping_size = self.config.get_setting("mapping_size")
+            if dist == "uniform":
                 mn = -scale
                 mx = scale
-                self.B = torch.rand((self.config["mapping_size"], input_dim)) * (mx - mn) + mn
-            elif self.config["dist"] == "gaussian":
-                self.B = torch.randn((self.config["mapping_size"], input_dim)) * scale
-            elif self.config["dist"] == "laplace":
-                rp = np.random.laplace(loc=0.0, scale=scale, size=(self.config["mapping_size"], input_dim))
+                self.B = torch.rand((mapping_size, input_dim)) * (mx - mn) + mn
+            elif dist == "gaussian":
+                self.B = torch.randn((mapping_size, input_dim)) * scale
+            elif dist == "laplace":
+                rp = np.random.laplace(loc=0.0, scale=scale, size=(mapping_size, input_dim))
                 self.B = torch.from_numpy(rp).float()
             self.B = self.B.to(device)
             if self.unc_type == "deltaenc":
-                first_layer_dim = self.config["mapping_size"] * 4
+                first_layer_dim = mapping_size * 4
             else:
-                first_layer_dim = self.config["mapping_size"] * 2
+                first_layer_dim = mapping_size * 2
         else:
             self.B = None
-            if self.unc_type == 'deltaenc':
-                first_layer_dim = 2*input_dim                
-                
+            if self.unc_type == "deltaenc":
+                first_layer_dim = 2 * input_dim
+
         layers = []
-        for i in range(self.config["n_layers"]):
-            is_first = (i == 0)
-            is_last = (i == (self.config["n_layers"] - 1))
-            input_dim_lyr = first_layer_dim if is_first else self.config["hidden_dim"]
-            output_dim_lyr = output_dim if is_last else self.config["hidden_dim"]
+        n_layers = self.config.get_setting("n_layers")
+        hidden_dim = self.config.get_setting("hidden_dim")
+        for i in range(n_layers):
+            is_first = i == 0
+            is_last = i == (n_layers - 1)
+            input_dim_lyr = first_layer_dim if is_first else hidden_dim
+            output_dim_lyr = output_dim if is_last else hidden_dim
             layers.append(
                 MLPLayer(
-                    activation=self.config['activation'],
+                    config=self.config,
                     input_dim=input_dim_lyr,
                     output_dim=output_dim_lyr,
-                    do=self.config['dropout'],
-                    dop=self.config['dropout_prob'],
-                    bn=self.config['batchnorm'],
-                    w0=self.config['w0'],
-                    activation_first=self.config['activation_first'],
                     is_first=is_first,
                     is_last=is_last,
                 )
             )
-
 
         self.mlp = nn.Sequential(*layers).to(device)
 
@@ -209,25 +206,28 @@ class MLP(nn.Module):
             out = self.mlp(h)
         return out
 
-def create_optimizer(network: Type[nn.Module], config: Dict[str, Any]) -> Union[Adam, SGD]:
+
+def create_optimizer(network: Type[nn.Module], config: ConfigSettings) -> Union[Adam, SGD]:
     """
     This function instantiates and returns optimizer objects of the input neural network
 
     :param network: The input neural network
     :param config: The configuration options provided by the user
     """
-    if config["opt_type"] == "Adam":
+    opt_type = config.get_setting("opt_type")
+    weight_decay = config.get_setting("weight_decay")
+    if opt_type == "Adam":
         optimizer = Adam(
             network.parameters(),
-            lr=config["learning_rate"],
-            weight_decay=config["weight_decay_factor"] if config["weight_decay"] else 0.0,
+            lr=config.get_setting("learning_rate"),
+            weight_decay=config.get_setting("weight_decay_factor") if weight_decay else 0.0,
         )
 
-    elif config["opt_type"] == "SGD":
+    elif opt_type == "SGD":
         optimizer = SGD(
             network.parameters(),
-            lr=config["learning_rate"],
-            weight_decay=config["weight_decay_factor"] if config["weight_decay"] else 0.0,
+            lr=config.get_setting("learning_rate"),
+            weight_decay=config.get_setting("weight_decay_factor") if weight_decay else 0.0,
         )
 
     else:

@@ -15,7 +15,6 @@ import numpy as np
 import psutil
 import ray
 import torch
-import yaml
 from botorch import fit_gpytorch_model
 from botorch.acquisition import PosteriorMean, qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.acquisition.cost_aware import InverseCostWeightedUtility
@@ -42,6 +41,8 @@ from torch import from_numpy, manual_seed, save
 from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
 from deepopt.acquisition import qMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy, qMultiFidelityMaxValueEntropy
+from deepopt.configuration import ConfigSettings
+from deepopt.defaults import Defaults
 from deepopt.deltaenc import DeltaEnc
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
@@ -128,42 +129,6 @@ class ConditionalOption(click.Option):
         return value, args
 
 
-class Defaults:
-    """
-    Default values for the DeepOpt library
-
-    :cvar random_seed: The default random seed. `Default value: 4321`
-    :cvar k_folds: The default k-folds value. `Default value: 5`
-    :cvar model_type: The default model type. Options here are 'GP' or 'delUQ'.
-        `Default value: 'GP'`
-    :cvar multi_fidelity: The default value on whether to run multi-fidelity
-        settings or not. `Default value: False`
-    :cvar num_candidates: The default number of candidates. `Default value: 2`
-    :cvar fidelity_cost: The default fidelity cost range. `Default value: '[1,10]'`
-    :cvar num_restarts_low: The default value for the number of restarts to use (low).
-        This default is used for the KG acquisition method in multi-fidelity runs. `Default
-        value: 5`
-    :cvar num_restarts_high: The default value for the number of restarts to use (high).
-        This default is used for all acquisition methods in single-fidelity runs and non-KG
-        acquisition methods in multi-fidelity runs. `Default value: 5`
-    :cvar raw_samples_low: The default value for the number of raw samples to use (low).
-        `Default value: 512`
-    :cvar raw_samples_high: The default value for the number of raw samples to use (high).
-        `Default value: 5000`
-    """
-
-    random_seed: int = 4321
-    k_folds: int = 5
-    model_type: str = "GP"
-    multi_fidelity: bool = False
-    num_candidates: int = 2
-    fidelity_cost: str = "[1,10]"
-    num_restarts_low: int = 5
-    num_restarts_high: int = 15
-    raw_samples_low: int = 512
-    raw_samples_high: int = 5000
-
-
 @dataclass
 class DeepoptConfigure:
     """
@@ -176,8 +141,7 @@ class DeepoptConfigure:
 
     :cvar data_file: A .npz or .npy file containing the data to use as input
     :cvar bounds: Reasonable limits on where to do your optimization search
-    :cvar config_file: A YAML file with neural network configuration values to use throughout the
-        learn/optimize processes (not used with GP).
+    :cvar config_settings: A ConfigSettings object with all of our configuration settings
     :cvar random_seed: The random seed to use when training and optimizing
     :cvar multi_fidelity: True if we're doing a multi-fidelity run, False otherwise
     :cvar num_fidelities: The number of fidelities to use if we're doing a
@@ -202,7 +166,7 @@ class DeepoptConfigure:
 
     data_file: str
     bounds: ndarray
-    config_file: str = None
+    config_settings: ConfigSettings
     random_seed: int = Defaults.random_seed
     multi_fidelity: bool = Defaults.multi_fidelity
     num_fidelities: int = None
@@ -237,13 +201,7 @@ class DeepoptConfigure:
         assert self.output_dim == 1, "Multi-output models not currently supported."
         self.target_fidelities = {self.input_dim - 1: self.num_fidelities - 1}
 
-        if self.config_file is not None:
-            with open(self.config_file, "r") as file:
-                if ".yaml" in self.config_file:
-                    self.config = yaml.safe_load(file)
-                else:
-                    self.config = json.loads(file)
-                # TODO: when running single fidelity with deluq, should n_epochs be set to 1000?
+        # TODO: when running single fidelity with deluq, should n_epochs be set to 1000?
         manual_seed(self.random_seed)
         np.random.seed(self.random_seed)
         random.seed(self.random_seed)
@@ -270,8 +228,8 @@ class DeepoptConfigure:
 
         :returns: A dictionary representing the score.
         """
-        self.config["variance"] = ray_config["variance"]  # (2**-3)**2
-        self.config["learning_rate"] = ray_config["learning_rate"]  # 0.01
+        self.config_settings.set_setting("variance", ray_config["variance"])  # (2**-3)**2
+        self.config_settings.set_setting("learning_rate", ray_config["learning_rate"])  # 0.01
 
         seed = ray_config["seed"]
         manual_seed(seed)
@@ -295,18 +253,18 @@ class DeepoptConfigure:
             test_loader = DataLoader(dataset, batch_size=len(test_ids), sampler=test_subsampler)
 
             net = Arch(
-                config=self.config,
+                config=self.config_settings,
                 unc_type="deltaenc",
                 input_dim=self.input_dim,
                 output_dim=self.output_dim,
                 device=self.device,
             )
-            opt = create_optimizer(net, self.config)
+            opt = create_optimizer(net, self.config_settings)
 
             for _, (X_train, y_train) in enumerate(train_loader):
                 model = DeltaEnc(
                     network=net,
-                    config=self.config,
+                    config=self.config_settings,
                     optimizer=opt,
                     X_train=X_train,
                     y_train=y_train,
@@ -415,20 +373,20 @@ class DeepoptConfigure:
 
         for key, val in best_result.config.items():
             print(f"{key} {val}")
-            if key in self.config:
-                self.config[key] = val
+            if key in self.config_settings:
+                self.config_settings.set_setting(key, val)
         net = Arch(
-            config=self.config,
+            config=self.config_settings,
             unc_type="deltaenc",
             input_dim=self.input_dim,
             output_dim=self.output_dim,
             device=self.device,
         )
-        opt = create_optimizer(net, self.config)
+        opt = create_optimizer(net, self.config_settings)
 
         model = DeltaEnc(
             network=net,
-            config=self.config,
+            config=self.config_settings,
             optimizer=opt,
             X_train=self.full_train_X,
             y_train=self.full_train_Y,
@@ -507,13 +465,17 @@ class DeepoptConfigure:
         :returns: A 'DeltaEnc' model.
         """
         net = Arch(
-            config=self.config, unc_type="deltaenc", input_dim=self.input_dim, output_dim=self.output_dim, device=self.device
+            config=self.config_settings,
+            unc_type="deltaenc",
+            input_dim=self.input_dim,
+            output_dim=self.output_dim,
+            device=self.device,
         )
-        opt = create_optimizer(net, self.config)
+        opt = create_optimizer(net, self.config_settings)
 
         model = DeltaEnc(
             network=net,
-            config=self.config,
+            config=self.config_settings,
             optimizer=opt,
             X_train=self.full_train_X,
             y_train=self.full_train_Y,
@@ -873,15 +835,15 @@ class DeepoptConfigure:
         """
         print(
             f"""
-        Infile: {self.data_file}
-        Outfile: {outfile}
-        Config File: {self.config_file}
-        Random Seed: {self.random_seed}
-        K-Folds: {self.k_folds}
-        Bounds: {self.bounds}
-        Model Type: {model_type}
-        Multi-Fidelity: {self.multi_fidelity}
-        """
+            Infile: {self.data_file}
+            Outfile: {outfile}
+            Config File: {self.config_settings.config_file}
+            Random Seed: {self.random_seed}
+            K-Folds: {self.k_folds}
+            Bounds: {self.bounds}
+            Model Type: {model_type}
+            Multi-Fidelity: {self.multi_fidelity}
+            """
         )
         self.train(model_type=model_type, out_file=outfile)
 
@@ -919,19 +881,18 @@ class DeepoptConfigure:
         """
         print(
             f"""
-        Infile: {self.data_file}
-        Outfile: {outfile}
-        Config File: {self.config_file}
-        Learner File: {learner_file}
-        Random Seed: {self.random_seed}
-        Bounds: {self.bounds}
-        Acq Method: {acq_method}
-        Model Type: {model_type}
-        Multi-Fidelity: {self.multi_fidelity}
-        Fidelity Cost: {fidelity_cost}
-        """
+            Infile: {self.data_file}
+            Outfile: {outfile}
+            Config File: {self.config_settings.config_file}
+            Learner File: {learner_file}
+            Random Seed: {self.random_seed}
+            Bounds: {self.bounds}
+            Acq Method: {acq_method}
+            Model Type: {model_type}
+            Multi-Fidelity: {self.multi_fidelity}
+            Fidelity Cost: {fidelity_cost}
+            """
         )
-
         model = self.load_model(model_type=model_type, learner_file=learner_file)
 
         if risk_measure:
@@ -1052,8 +1013,11 @@ def learn(
     Train a model on a dataset and save that model to an output file.
     """
     bounds = torch.FloatTensor(json.loads(bounds)).T
+
+    config_settings = ConfigSettings(config_file, model_type)
+
     dc = DeepoptConfigure(
-        config_file=config_file,
+        config_settings=config_settings,
         data_file=infile,
         multi_fidelity=multi_fidelity,
         random_seed=random_seed,
@@ -1204,8 +1168,11 @@ def optimize(
     Load in the model created by `learn` and use it to propose new simulation points.
     """
     bounds = torch.FloatTensor(json.loads(bounds)).T
+
+    config_settings = ConfigSettings(config_file, model_type)
+
     dc = DeepoptConfigure(
-        config_file=config_file,
+        config_settings=config_settings,
         data_file=infile,
         multi_fidelity=multi_fidelity,
         random_seed=random_seed,
