@@ -25,8 +25,6 @@ class ConfigSettings:
         self.config_file = config_file
         self.model_type = model_type
 
-        self.config_settings = {}
-
         if self.model_type == "GP":
             self.default_config = GP_CONFIG
         elif self.model_type == "delUQ":
@@ -36,6 +34,7 @@ class ConfigSettings:
                 f"The model type {self.model_type} has not yet been implemented. Options: 'GP' or 'delUQ'"
             )
 
+        self.config_settings = {"model_type": self.model_type}
         self.load_config()
 
     def __copy__(self):
