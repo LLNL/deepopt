@@ -40,12 +40,13 @@ deallocate_nodes:
     - pwd
 
 .test-unit:
-  # Runs the unit test suite
   tags:
     - shell
   script:
     - echo "===== begin test-unit ====="
     - pwd
+    - which python
+    - python --version
 
 test-unit-3.8:
   extends: .test-unit
