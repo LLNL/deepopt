@@ -11,10 +11,8 @@ check-changelog:
   script:
     - echo "===== Begin Changelog Check ====="
     - echo "Latest commit on source branch - $CI_COMMIT_SHA"
-    - echo "Target branch - $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-    - target_branch_commit=$(git rev-parse $CI_MERGE_REQUEST_TARGET_BRANCH_NAME)
-    - echo "Latest commit on target branch - $target_branch_commit"
-    - git diff --name-only $target_branch_commit $CI_COMMIT_SHA
+    - echo "Latest commit on target branch - $CI_MERGE_REQUEST_TARGET_BRANCH_SHA"
+    - git diff --name-only $CI_MERGE_REQUEST_TARGET_BRANCH_SHA $CI_COMMIT_SHA
     # - git branch -a
     # - git diff --name-only refs/remotes/origin/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
     # - git diff --name-only "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
