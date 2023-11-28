@@ -11,8 +11,8 @@ check-changelog:
   script:
     - echo "===== Begin Changelog Check ====="
     - echo "Latest commit on source branch - $CI_COMMIT_SHA"
-    - echo "Targtet branch - $CI_MERGE_REQUEST_TARGET_BRANCH"
-    - target_branch_commit=$(git rev-parse $CI_MERGE_REQUEST_TARGET_BRANCH)
+    - echo "Target branch - $CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
+    - target_branch_commit=$(git rev-parse $CI_MERGE_REQUEST_TARGET_BRANCH_NAME)
     - echo "Latest commit on target branch - $target_branch_commit"
     - git diff --name-only $target_branch_commit $CI_COMMIT_SHA
     # - git branch -a
@@ -32,6 +32,8 @@ check-changelog:
 #     project: kur1/deepopt_tests
 
 trigger_tests:
+  tags:
+    - shell
   stage: run-test-suite
   script:
     - curl -X POST -F token=$CI_JOB_TOKEN -F ref=main https://gitlab.com/api/v4/projects/7151/trigger/pipeline
