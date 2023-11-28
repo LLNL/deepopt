@@ -10,20 +10,15 @@ check-changelog:
     - merge_requests
   script:
     - echo "===== Begin Changelog Check ====="
-    - echo "Merge request diff SHA - $CI_MERGE-REQUEST_DIFF_BASE_SHA"
+    - echo "Merge request diff SHA - $CI_MERGE_REQUEST_DIFF_BASE_SHA"
     - git fetch
-    - FILES_CHANGED=$(git diff --name-only $CI_MERGE_REQUEST_DIFF_BASE_SHA...HEAD)
-    - echo $FILES_CHANGED
-    # - git branch -a
-    # - git diff --name-only refs/remotes/origin/$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME refs/remotes/origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME
-    # - git diff --name-only "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
-    # - CHANGES=$(git diff --name-only "$CI_MERGE_REQUEST_SOURCE_BRANCH_NAME" "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" | grep '^CHANGELOG.md$')
-    # - if [ -n "$CHANGES" ]; then
-    #     echo "===== Changelog has been updated! =====";
-    #   else
-    #     echo "ERROR Changelog not updated";
-    #     exit 1;
-    #   fi
+    - CHANGES=$(git diff --name-only $CI_MERGE_REQUEST_DIFF_BASE_SHA...HEAD | grep '^CHANGELOG.md$')
+    - if [ -n "$CHANGES" ]; then
+        echo "===== Changelog has been updated! =====";
+      else
+        echo "ERROR Changelog not updated";
+        exit 1;
+      fi
 
 # trigger_tests:
 #   stage: run-test-suite
@@ -33,6 +28,7 @@ check-changelog:
 trigger_tests:
   tags:
     - shell
+    - quartz
   stage: run-test-suite
   script:
     - curl -X POST -F token=$CI_JOB_TOKEN -F ref=main https://gitlab.com/api/v4/projects/7151/trigger/pipeline
