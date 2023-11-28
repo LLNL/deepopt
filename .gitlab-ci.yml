@@ -32,6 +32,6 @@ trigger_tests:
     - quartz
   stage: run-test-suite
   script:
-    - curl -X POST -F token=$CI_JOB_TOKEN -F ref=main https://gitlab.com/api/v4/projects/7151/trigger/pipeline
+    - curl -X POST --fail -F token=$CI_JOB_TOKEN -F ref=main https://lc.llnl.gov/gitlab/api/v4/projects/7151/trigger/pipeline
   rules:
     - if: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
