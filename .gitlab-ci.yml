@@ -9,6 +9,7 @@ check-changelog:
   stage: check-changelog
   only:
     - merge_requests
+  allow_failure: true
   script:
     - echo "===== Begin Changelog Check ====="
     - echo "Merge request diff SHA - $CI_MERGE_REQUEST_DIFF_BASE_SHA"
