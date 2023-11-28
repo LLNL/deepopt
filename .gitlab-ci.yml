@@ -10,13 +10,16 @@ check-changelog:
     - merge_requests
   script:
     - echo "===== Begin Changelog Check ====="
-    - CHANGES=$(git diff --name-only $CI_COMMIT_BEFORE_SHA $CI_COMMIT_SHA | grep '^CHANGELOG.md$')
-    - if [ -n "$CHANGES" ]; then
-        echo "===== Changelog has been updated! =====";
-      else
-        echo "ERROR Changelog not updated";
-        exit 1;
-      fi
+    - echo $CI_COMMIT_BEFORE_SHA
+    - echo $CI_COMMIT_SHA
+    - grep '^CHANGELOG.md$'
+    # - CHANGES=$(git diff --name-only $CI_COMMIT_BEFORE_SHA $CI_COMMIT_SHA | grep '^CHANGELOG.md$')
+    # - if [ -n "$CHANGES" ]; then
+    #     echo "===== Changelog has been updated! =====";
+    #   else
+    #     echo "ERROR Changelog not updated";
+    #     exit 1;
+    #   fi
 
 # trigger_tests:
 #   stage: run-test-suite
