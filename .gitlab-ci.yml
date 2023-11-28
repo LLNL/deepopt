@@ -2,6 +2,9 @@ stages:
   - check-changelog
   - run-test-suite
 
+variables:
+  GIT_DEPTH: 50
+
 check-changelog:
   tags:
     - shell
