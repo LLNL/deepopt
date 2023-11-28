@@ -5,6 +5,7 @@ stages:
 check-changelog:
   tags:
     - shell
+    - quartz
   stage: check-changelog
   only:
     - merge_requests
