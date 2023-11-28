@@ -12,9 +12,10 @@ check-changelog:
   allow_failure: true
   script:
     - echo "===== Begin Changelog Check ====="
-    - echo "Merge request diff SHA - $CI_MERGE_REQUEST_DIFF_BASE_SHA"
-    - git fetch
-    - CHANGES=$(git diff --name-only $CI_MERGE_REQUEST_DIFF_BASE_SHA...HEAD | grep '^CHANGELOG.md$')
+    - echo "Commit at HEAD of target branch - $CI_MERGE_REQUEST_DIFF_BASE_SHA"
+    - echo "Commit at HEAD of source branch - $CI_COMMIT_SHA"
+    # - git fetch
+    - CHANGES=$(git diff --name-only $CI_MERGE_REQUEST_DIFF_BASE_SHA $CI_COMMIT_SHA | grep '^CHANGELOG.md$')
     - if [ -n "$CHANGES" ]; then
         echo "===== Changelog has been updated! =====";
       else
@@ -33,6 +34,6 @@ trigger_tests:
     - quartz
   stage: run-test-suite
   script:
-    - curl -X POST --fail -F token=$CI_JOB_TOKEN -F ref=main https://lc.llnl.gov/gitlab/api/v4/projects/7151/trigger/pipeline
+    - curl -X POST --fail -F token=glptt-6041feae03d10ca5577bb3d080e9e56897231fc7 -F ref=main https://lc.llnl.gov/gitlab/api/v4/projects/7151/trigger/pipeline
   rules:
     - if: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
