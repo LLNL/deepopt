@@ -17,7 +17,6 @@ check-changelog:
     - echo "===== Begin Changelog Check ====="
     - echo "Commit at HEAD of target branch - $CI_MERGE_REQUEST_DIFF_BASE_SHA"
     - echo "Commit at HEAD of source branch - $CI_COMMIT_SHA"
-    # - git fetch
     - CHANGES=$(git diff --name-only $CI_MERGE_REQUEST_DIFF_BASE_SHA $CI_COMMIT_SHA | grep '^CHANGELOG.md$')
     - if [ -n "$CHANGES" ]; then
         echo "===== Changelog has been updated! =====";
@@ -27,16 +26,25 @@ check-changelog:
       fi
 
 # trigger_tests:
+#   tags:
+#     - shell
+#     - quartz
 #   stage: run-test-suite
-#   trigger:
-#     project: kur1/deepopt_tests
+#   script:
+#     - curl -X POST --fail -F token=glptt-6041feae03d10ca5577bb3d080e9e56897231fc7 -F ref=main https://lc.llnl.gov/gitlab/api/v4/projects/7151/trigger/pipeline
+#   rules:
+#     - if: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
 
-trigger_tests:
-  tags:
-    - shell
-    - quartz
+.downstream-test-pipeline:
+  variables:
+    UPSTREAM_SOURCE_BRANCH_NAME: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+  trigger:
+    project: kur1/deepopt_tests
+    branch: main
+    strategy: depend
+
+run-test-suite:
   stage: run-test-suite
-  script:
-    - curl -X POST --fail -F token=glptt-6041feae03d10ca5577bb3d080e9e56897231fc7 -F ref=main https://lc.llnl.gov/gitlab/api/v4/projects/7151/trigger/pipeline
-  rules:
-    - if: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+  extends: .downstream-test-pipeline
+  environment:
+    name: test-suite-run/$CI_COMMIT_REF_SLUG
