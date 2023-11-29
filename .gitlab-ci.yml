@@ -1,6 +1,7 @@
 stages:
   - check-changelog
   - run-test-suite
+  - cleanup
 
 variables:
   GIT_DEPTH: 50
@@ -30,6 +31,7 @@ check-changelog:
     - merge_requests
   variables:
     UPSTREAM_SOURCE_BRANCH_NAME: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
+    UPSTREAM_ENVIRONMENT_ACTION: $CI_ENVIRONMENT_ACTION
   trigger:
     project: kur1/deepopt_tests
     branch: main
@@ -40,3 +42,12 @@ run-test-suite:
   extends: .downstream-test-pipeline
   environment:
     name: test-suite-run/$CI_COMMIT_REF_SLUG
+    on_stop: clean-test-suite
+
+clean-test-suite:
+  stage: cleanup
+  extends: .downstream-test-pipeline
+  environment:
+    name: cleanup/$CI_COMMIT_REF_SLUG
+    action: stop
+  when: manual
