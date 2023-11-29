@@ -25,16 +25,6 @@ check-changelog:
         exit 1;
       fi
 
-# trigger_tests:
-#   tags:
-#     - shell
-#     - quartz
-#   stage: run-test-suite
-#   script:
-#     - curl -X POST --fail -F token=glptt-6041feae03d10ca5577bb3d080e9e56897231fc7 -F ref=main https://lc.llnl.gov/gitlab/api/v4/projects/7151/trigger/pipeline
-#   rules:
-#     - if: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
-
 .downstream-test-pipeline:
   variables:
     UPSTREAM_SOURCE_BRANCH_NAME: $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME
