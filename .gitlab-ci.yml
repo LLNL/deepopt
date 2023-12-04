@@ -1,10 +1,33 @@
 stages:
+  - allocate
   - check-changelog
   - run-test-suite
   - cleanup
+  - deallocate
 
 variables:
   GIT_DEPTH: 50
+
+allocate_nodes:
+  tags:
+    - shell
+    - quartz
+  stage: allocate
+  script:
+    - echo "===== begin alloc for remaining stages ====="
+    -  salloc -N 1 --exclusive -p pdebug -t 60 --no-shell --job-name=$ALLOC_NAME
+    - JOBID=$(squeue -h --name=${ALLOC_NAME} --format=%A)
+    - echo "===== alloc'd JOBID $JOBID ====="
+
+deallocate_nodes:
+  tags:
+    - shell
+    - quartz
+  stage: deallocate
+  when: always
+  script:
+    - export JOBID=$(squeue -h --name=${ALLOC_NAME} --format=%A)
+    - ([[ -n "${JOBID}" ]] && scancel ${JOBID} || echo "Job ${JOBID} not running")
 
 check-changelog:
   tags:
