@@ -41,13 +41,13 @@ run-test-suite:
   stage: run-test-suite
   extends: .downstream-test-pipeline
   environment:
-    name: test-suite-run/$CI_COMMIT_REF_SLUG
+    name: test-suite/$CI_COMMIT_REF_SLUG
     on_stop: clean-test-suite
 
 clean-test-suite:
   stage: cleanup
   extends: .downstream-test-pipeline
   environment:
-    name: cleanup/$CI_COMMIT_REF_SLUG
+    name: test-suite/$CI_COMMIT_REF_SLUG
     action: stop
   when: manual
