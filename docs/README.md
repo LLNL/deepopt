@@ -1,6 +1,6 @@
-# Deepopt Documentation Guide
+# DeepOpt Documentation Guide
 
-The documentation for the Deepopt library uses [MkDocs](https://www.mkdocs.org/).
+The documentation for the DeepOpt library uses [MkDocs](https://www.mkdocs.org/).
 
 ## Prerequisites
 
