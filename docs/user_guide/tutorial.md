@@ -1,13 +1,13 @@
 # Tutorial: Using neural network surrogates
 
-One of the powerful features of deepopt is the ability to use neural network surrogates in place of Gaussian process surrogates during optimization. In this tutorial, we'll repeat the "Getting Started" example, but using neural networks in place of Gaussian process. One key difference is the need for a neural network configuration file that specifies the network architecture, activations functions, and a few other parameters. We'll describe these in detail as we move along.
+One of the powerful features of deepopt is the ability to use neural network surrogates in place of Gaussian process surrogates during optimization. In this tutorial, we'll repeat the [Getting Started](./index.md#getting-started-with-deepopt) example, but using neural networks in place of Gaussian process. One key difference is the need for a neural network configuration file that specifies the network architecture, activations functions, and a few other parameters. We'll describe these in detail as we move along.
 
-Neural networks in DeepOpt use the "delta-UQ" method for uncertainty quantification (ref. to delUQ paper). The naming conventions reflect this, so to use neural networks, we set the model_type to 'delUQ' and the model class is called DelUQModel.
+Neural networks in DeepOpt use the ["delta-UQ"](https://arxiv.org/abs/2110.02197) method for uncertainty quantification. The naming conventions reflect this, so to use neural networks, we set the model_type to "delUQ" and the model class is called `DelUQModel`.
 
 ## Create the initial data
-Just as in "Getting Started", we'll put some initial data in a 'sims.npz' file
+Just as in [Getting Started](./index.md#getting-started-with-deepopt), we'll put some initial data in a 'sims.npz' file
 
-```python
+```{.py title="generate_simulation_inputs.py" linenums="1"}
 import torch
 import numpy as np
 
@@ -17,27 +17,79 @@ num_points = 10
 X = torch.rand(num_points, input_dim)
 y = -(X**2).sum(axis=1)
 
-np.savez('sims.npz', X=X, y=y) # Save data to file 'sims.npz'
+np.savez('sims.npz', X=X, y=y) # (1)
+```
+1. Save data to file 'sims.npz'
+
+We can now generate the `sims.npz` file with:
+
+```bash
+python generate_simulation_inputs.py
 ```
 
 ## Default neural network
 
-Using ConfigSettings without passing a configuration file name will use the default neural net configuration:
+From here we can either use the DeepOpt API or we can use the DeepOpt CLI.
 
-```python
+If you're using the DeepOpt API, you'll first need to load the `ConfigSettings` class:
+
+```{.py linenums="1" title="run_deepopt.py"}
 from deepopt.configuration import ConfigSettings
-from deepopt.models import DelUQModel
+from deepopt.deepopt_cli import get_deepopt_model
 
-cs = ConfigSettings(model_type='delUQ')
-bounds = torch.FloatTensor(input_dim*[[0,1]]).T # Learning and optimizing will take place within these input bounds
-model = DelUQModel(data_file='sims.npz', bounds=bounds)
+model_type = 'delUQ' # (1)
+model_class = get_deepopt_model(model_type=model_type) # (2)
+cs = ConfigSettings(model_type=model_type) #(3)
+bounds = torch.FloatTensor(input_dim*[[0,1]]).T  # (4)
+model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  # (5)
 ```
 
-Training and optimizing are done as in "Getting Started", with the array of new points being recorded in 'suggested_inputs.npy':
+1. Set the model type to use throughout the script.
+2. Set the model class associated with the selected model type (in this case `DelUQModel`)
+3. This sets up the neural network configuration (more generally the model configuration). Since we don't pass a configuration file, the default configuration will be used.
+4. Learning and optimizing will take place within these input bounds
+5. Model is loaded the same way as with GP, but now we are using `DelUQModel`
 
-```python
-model.learn(outfile='learner_GP.ckpt')
-model.optimize(outfile='suggested_inputs.npy', learner_file='learner_GP.ckpt', acq_method='EI')
+Training and optimizing are done as in [Getting Started](./index.md#getting-started-with-deepopt), with the array of new points being recorded in 'suggested_inputs.npy':
+
+=== "DeepOpt API"
+```{.py title="run_deepopt.py" linenums=9}
+model.learn(outfile=f'learner_{model_type}.ckpt') # (1)
+```
+1. Train the neural network and save its state to a checkpoint file.
+
+=== "DeepOpt CLI"
+```bash
+input_dim = 5
+bounds = ""
+for i in {1..input_dim-1}; do bounds+="[0,1],"; done
+bounds+="[0,1]"
+deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds
+```
+
+The checkpoint files saved by DeepOpt use `torch.save` under the hood. They are python dictionaries and can be viewed using `torch.load`:
+```{.py title="view_ckpt.py" linenums=1}
+import torch
+ckpt = torch.load(f'learner_{model_type}.ckpt')
+print(ckpt.keys())
+```
+The delUQ model has 4 entries in the checkpoint dictionary: `epoch` is the number of epochs the NN was trained for, `state_dict` is a dictionary containing all of the values of the NN weights, biases, and other layer parameters, `B` is the initial transformation to frequency space when using Fourier features, and `opt_state_dict` contains the optimizer parameters.
+
+Now that we saved the trained model, we can use it to propose new candidate points:
+=== DeepOpt API
+```{.py title="run_deepopt.py" linenums=10}
+model.optimize(outfile='suggested_inputs.npy', learner_file=f'learner_{model_type}.ckpt', acq_method='EI') # (1)
+```
+1. Use Expected Improvement to acquire new points based on the model saved in learner_file and save those points as a numpy array in outfile.
+
+=== DeepOpt CLI
+```bash
+deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt -m delUQ -b $bounds -a EI
+```
+
+The saved file `suggested_inputs.npy` is a `numpy` save file containing the array of new points with dimension Nxd (N= # of new points, d = input dimensions). We can view the file using `numpy.load`:
+```bash
+python -c "import numpy as np; print(np.load('suggested_inputs.npy'))"
 ```
 
 ## Changing the neural network configuration
