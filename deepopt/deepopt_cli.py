@@ -173,9 +173,7 @@ def deepopt_cli():
     "--config-file",
     help="Config file containing hyper parameters.",
     type=click.Path(exists=True),
-    depends_on="model_type",
-    equal_to="delUQ",
-    cls=ConditionalOption,
+    default=None,
 )
 @click.option(
     "-r",
@@ -216,7 +214,7 @@ def learn(
     """
     bounds = torch.FloatTensor(json.loads(bounds)).T
 
-    config_settings = ConfigSettings(config_file, model_type)
+    config_settings = ConfigSettings(model_type, config_file=config_file)
 
     deepopt_model = get_deepopt_model(model_type)
 
@@ -287,9 +285,7 @@ def learn(
     "--config-file",
     help="Config file containing hyper parameters.",
     type=click.Path(exists=True),
-    cls=ConditionalOption,
-    depends_on="model_type",
-    equal_to="delUQ",
+    default=None,
 )
 @click.option(
     "-r",
@@ -373,7 +369,7 @@ def optimize(
     """
     bounds = torch.FloatTensor(json.loads(bounds)).T
 
-    config_settings = ConfigSettings(config_file, model_type)
+    config_settings = ConfigSettings(model_type, config_file=config_file)
 
     deepopt_model = get_deepopt_model(model_type)
 

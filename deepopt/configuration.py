@@ -15,7 +15,7 @@ class ConfigSettings:
     Class for loading and storing configuration settings.
     """
 
-    def __init__(self, config_file: str, model_type: str):
+    def __init__(self, model_type: str, config_file: str = None):
         """
         Set up the configurations by loading them from `config_file`.
 
@@ -30,9 +30,7 @@ class ConfigSettings:
         elif self.model_type == "delUQ":
             self.default_config = DELUQ_CONFIG
         else:
-            raise NotImplementedError(
-                f"The model type {self.model_type} has not yet been implemented. Options: 'GP' or 'delUQ'"
-            )
+            raise ValueError(f"The model type {self.model_type} has not yet been implemented. Options: 'GP' or 'delUQ'")
 
         self.config_settings = {"model_type": self.model_type}
         self.load_config()
@@ -72,11 +70,15 @@ class ConfigSettings:
         """
         Load in all of the configuration options provided by the user.
         """
-        with open(self.config_file, "r") as file:
-            if ".yaml" in self.config_file:
-                config = yaml.safe_load(file)
-            else:
-                config = json.loads(file)
+        config = None
+        if self.config_file is not None:
+            with open(self.config_file, "r") as file:
+                if self.config_file.endswith(".yaml"):
+                    config = yaml.safe_load(file)
+                elif self.config_file.endswith(".json"):
+                    config = json.loads(file)
+                else:
+                    raise ValueError(f"The config file {self.config_file} must be either a yaml file or a json file.")
 
         if config is not None:
             self.config_settings.update(config)
