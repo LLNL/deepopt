@@ -76,13 +76,13 @@ print(ckpt.keys())
 The delUQ model has 4 entries in the checkpoint dictionary: `epoch` is the number of epochs the NN was trained for, `state_dict` is a dictionary containing all of the values of the NN weights, biases, and other layer parameters, `B` is the initial transformation to frequency space when using Fourier features, and `opt_state_dict` contains the optimizer parameters.
 
 Now that we saved the trained model, we can use it to propose new candidate points:
-=== DeepOpt API
+=== "DeepOpt API"
 ```{.py title="run_deepopt.py" linenums=10}
 model.optimize(outfile='suggested_inputs.npy', learner_file=f'learner_{model_type}.ckpt', acq_method='EI') # (1)
 ```
 1. Use Expected Improvement to acquire new points based on the model saved in learner_file and save those points as a numpy array in outfile.
 
-=== DeepOpt CLI
+=== "DeepOpt CLI"
 ```bash
 deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt -m delUQ -b $bounds -a EI
 ```
