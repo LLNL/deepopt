@@ -13,6 +13,8 @@ allocate_nodes:
     - shell
     - quartz
   stage: allocate
+  only:
+    - merge_requests
   script:
     - echo "===== begin alloc for remaining stages ====="
     -  salloc -N 1 --exclusive -p pdebug -t 60 --no-shell --job-name=$ALLOC_NAME
@@ -24,6 +26,8 @@ deallocate_nodes:
     - shell
     - quartz
   stage: deallocate
+  only:
+    - merge_requests
   when: always
   script:
     - export JOBID=$(squeue -h --name=${ALLOC_NAME} --format=%A)
