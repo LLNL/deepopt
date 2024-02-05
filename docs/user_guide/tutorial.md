@@ -7,7 +7,7 @@ Neural networks in DeepOpt use the ["delta-UQ"](https://arxiv.org/abs/2110.02197
 ## Create the initial data
 Just as in [Getting Started](./index.md#getting-started-with-deepopt), we'll put some initial data in a 'sims.npz' file
 
-```{.py title="generate_simulation_inputs.py" linenums="1"}
+```py title="generate_simulation_inputs.py" linenums="1"
 import torch
 import numpy as np
 
@@ -33,7 +33,7 @@ From here we can either use the DeepOpt API or we can use the DeepOpt CLI.
 
 If you're using the DeepOpt API, you'll first need to load the `ConfigSettings` class:
 
-```{.py linenums="1" title="run_deepopt.py"}
+```py linenums="1" title="run_deepopt.py"
 from deepopt.configuration import ConfigSettings
 from deepopt.deepopt_cli import get_deepopt_model
 
@@ -53,22 +53,23 @@ model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  # 
 Training and optimizing are done as in [Getting Started](./index.md#getting-started-with-deepopt), with the array of new points being recorded in 'suggested_inputs.npy':
 
 === "DeepOpt API"
-```{.py title="run_deepopt.py" linenums=9}
-model.learn(outfile=f'learner_{model_type}.ckpt') # (1)
-```
-1. Train the neural network and save its state to a checkpoint file.
+    ```py title="run_deepopt.py" linenums="9"
+    model.learn(outfile=f'learner_{model_type}.ckpt') # (1)
+    ```
+
+    1. Train the neural network and save its state to a checkpoint file.
 
 === "DeepOpt CLI"
-```bash
-input_dim = 5
-bounds = ""
-for i in {1..input_dim-1}; do bounds+="[0,1],"; done
-bounds+="[0,1]"
-deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds
-```
+    ```bash
+    input_dim = 5
+    bounds = ""
+    for i in {1..input_dim-1}; do bounds+="[0,1],"; done
+    bounds+="[0,1]"
+    deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds
+    ```
 
 The checkpoint files saved by DeepOpt use `torch.save` under the hood. They are python dictionaries and can be viewed using `torch.load`:
-```{.py title="view_ckpt.py" linenums=1}
+```py title="view_ckpt.py" linenums="1"
 import torch
 ckpt = torch.load(f'learner_{model_type}.ckpt')
 print(ckpt.keys())
@@ -76,16 +77,20 @@ print(ckpt.keys())
 The delUQ model has 4 entries in the checkpoint dictionary: `epoch` is the number of epochs the NN was trained for, `state_dict` is a dictionary containing all of the values of the NN weights, biases, and other layer parameters, `B` is the initial transformation to frequency space when using Fourier features, and `opt_state_dict` contains the optimizer parameters.
 
 Now that we saved the trained model, we can use it to propose new candidate points:
+
 === "DeepOpt API"
-```{.py title="run_deepopt.py" linenums=10}
-model.optimize(outfile='suggested_inputs.npy', learner_file=f'learner_{model_type}.ckpt', acq_method='EI') # (1)
-```
-1. Use Expected Improvement to acquire new points based on the model saved in learner_file and save those points as a numpy array in outfile.
+    ```py title="run_deepopt.py" linenums="10"
+    model.optimize(outfile='suggested_inputs.npy',
+                   learner_file=f'learner_{model_type}.ckpt',
+                   acq_method='EI') # (1)
+    ```
+
+    1. Use Expected Improvement to acquire new points based on the model saved in learner_file and save those points as a numpy array in outfile.
 
 === "DeepOpt CLI"
-```bash
-deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt -m delUQ -b $bounds -a EI
-```
+    ```bash
+    deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt -m delUQ -b $bounds -a EI
+    ```
 
 The saved file `suggested_inputs.npy` is a `numpy` save file containing the array of new points with dimension Nxd (N= # of new points, d = input dimensions). We can view the file using `numpy.load`:
 ```bash
