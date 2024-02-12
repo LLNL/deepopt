@@ -89,7 +89,8 @@ Now that we saved the trained model, we can use it to propose new candidate poin
 
 === "DeepOpt CLI"
     ```bash
-    deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt -m delUQ -b $bounds -a EI
+    deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt \
+    -m delUQ -b $bounds -a EI
     ```
 
 The saved file `suggested_inputs.npy` is a `numpy` save file containing the array of new points with dimension Nxd (N= # of new points, d = input dimensions). We can view the file using `numpy.load`:
@@ -99,48 +100,103 @@ python -c "import numpy as np; print(np.load('suggested_inputs.npy'))"
 
 ## Changing the neural network configuration
 
-The following parameters are available to specify in the neural network configuration file:
+# Tutorial: Iterative optimization
 
-### ff
-To use "Fourier features" set this to True (otherwise False). When using Fourier features, a Fourier transform with learnable frequencies is implemented prior to the neural network layer. The number of such frequencies is set by the "mapping_size" parameter in the configuration file. Using Fourier features can help the network better learn small-scale features in the data without smearing them out.
+Typical Bayesian optimization workflows will have an iterative structure, as proposed candidates from one iteration are added to the training of the surrogate in the following iteration. We demonstrate how to use the DeepOpt API to accomplish this.
 
-### mapping_size
-The number of Fourier frequencies to learn when using Fourier features
+=== "DeepOpt API"
+    ```py title='iterative_optimization.py'
+    import torch
+    import numpy as np
+    from deepopt.configuration import ConfigSettings
+    from deepopt.deepopt_cli import get_deepopt_model
 
-### dist
-The initial distribution of Fourier frequencies. Choices are "uniform", "gaussian", and "laplace".
+    def objective(X):
+        return -(X**2).sum(axis=1)
 
-### variance
-The scale of the frequency distribution ("dist") when using Fourier features. A "uniform" distribution is constant between +/- scale, a "gaussian" uses scale as the standard deviation, and the "laplace" distribution uses scale as the exponential decay factor.
+    input_dim = 5
+    num_initial_points = 10
 
-This parameter is optimized during hyperparameter tuning, so it is not necessary to set precisely.
+    X_init = torch.rand(num_initial_points, input_dim)
+    y_init = objective(X_init)
 
-### n_layers
-The total number of layers in the neural network. This includes the first and last layer, so n_layers=4 will have 2 hidden layers.
+    np.savez("points_iter0.npz",X=X_init,y=y_init)
 
-### hidden_dim
-The number of neurons in each hidden layer (width of the network).
+    model_type = "GP"
+    bounds = torch.FloatTensor(input_dim*[[0,1]]).T
 
-### activation
-The activation function to use. Currently supported activations are "relu", "tanh", "identity", and "siren". The "identity" activation will remove any non-linearity in the network, reducing the surrogate to linear regression. The "siren" activaton uses a sine function and initializes the layer weights differently than usual. For more details see the SIREN paper.
+    deepopt_model = get_deepopt_model(model_type)
 
-### w0
-The "w0" parameter to use for initializing weights in a SIREN network. The weight matrix in each layers is w0*W, where W is initalized uniformly on -1/input_dim to 1/input_dim in the first layer and uniformly on -sqrt(6/layer_dim)/w0 to sqrt(6/layer_dim)/w0 in all other layers.
+    n_iterations = 20
+    for i in range(n_iterations):
+        data_prev_file = f"points_iter{i}.npz"
+        candidates_file = "suggested_inputs_iter{it}.npy".format(it=i+1)
+        ckpt_file = "learner_{model_type}_iter{it}.ckpt".format(it=i+1)
 
-### dropout
-Whether to use dropout regularization (True) or not (False)
+        model = deepopt_model(data_file=data_prev_file,bounds=bounds)
+        model.learn(outfile=ckpt_file)
+        model.optimize(outfile=candidates_file, ckpt_file, acq_method="EI")
 
-### dropout_prob
-When using dropout, this sets the probability of dropping a neuron.
+        data_prev = np.loadz(data_prev_file)
+        X_prev = data_prev["X"]
+        y_prev = data_prev["y"]
+        X_new = np.load(candidates_file)
+        y_new = objective(X_new)
+        X = np.stack([X_prev,X_new],axis=0)
+        y = np.stack([y_prev,y_new],axis=0)
+        np.savez("points_iter{it}.npz".format(it=i+1),X=X,y=y)
+    ```
 
-### activation_first
-If True, the activation function is applied first followed by batchnorm and dropout. Otherwise, the order is dropout-activation-batchnorm.
+# Tutorial: Multi-fidelity optimization
+Performing multi-fidelity optimization with DeepOpt requires only that the data files have the last input column as a fidelity, with integer values ranging from 0 to number of fidelities - 1, and to pass a list of fidelity costs to the "optimize" method (the length of the list must match the number of fidelities). In addition, the acquisition function must be appropriate for multi-fidelity optimization.
 
-### learning_rate
-The learning rate to use in the optimizer. This is optimized during hyperparameter tuning, so it is not necessary to set precisely.
+We show here the necessary changes to "generate_simulation_inputs.py" and the optimize call from the [Getting Started](./index.md#getting-started-with-deepopt) page:
 
-### n_epochs
-The number of epochs to train for. We recommend keeping a large number (>=1000) when using smaller datasets.
+```py title="generate_simulation_inputs_mf.py" linenums="1"
+import torch
+import numpy as np
 
-### batch_size
-The batch size for
+input_dim = 5
+num_points = 10
+
+X = torch.rand(num_points, input_dim)
+X[:,-1] = X[:,-1].round()
+y = -(X**2).sum(axis=1) # (1)
+
+np.savez('sims.npz', X=X, y=y)
+```
+
+1. In this simple example, the high fidelity paraboloid is shifted one unti relative to the low fidelity paraboloid.
+
+=== "DeepOpt API"
+
+    ```py linenums="6"
+    model.optimize(outfile="suggested_inputs.npy",
+                   learner_file=f"learner_{model_type}.ckpt",
+                   acq_method="KG",fidelity_cost=[1,6]) # (1)
+    ```
+
+    1. We use the Knowledge Gradient (KG) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
+
+=== "DeepOpt CLI"
+
+    ```bash
+    deepopt optimize -i sims.npz -l learner_GP.ckpt -o suggested_inputs.npy \
+    -b "[[0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]" \
+    -a KG --multi-fidelity --fidelity-cost "[1,6]" # (1)
+    ```
+
+    1. We use the Knowledge Gradient (KG) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
+
+# Tutorial: Acquisition functions
+There are currently four acquisition functions available for single-fidelity optimization: Expected Improvement (EI), Noisy Expected Improvement (NEI), Knowledge Gradient (KG), and Max Value Entropy (MaxValEntropy). The last two (KG & Max Value Entropy) are also available for multi-fidelity optimization. These acquisition functions are built around the associated BoTorch acquisition functions: qExpectedImprovement, qNoisyExpectedImprovement, qKnowledgeGradient, and qMaxValueEntropy. We briefly describe the strengths and weaknesses of each acquisition.
+
+EI: This is one of the simplest acquisition functions for Bayesian optimization. It selects points that optimize improvement over the best function value found thus far (weighted by the probability of achieving such improvement). The interpretation is straightforward, but EI tends favor exploitation over exploration and can get stuck near local optima.
+
+NEI: This adapts EI to problems that are noisy (strong fluctuations in the objective function). The major change from EI is that NEI measures improvement over the best surrogate value (rather than objective function value) among points selected thus far. This allows NEI to avoid getting thrown off by noise, since the surrogate will generally be much smoother than the objective function.
+
+KG: Knowledge gradient attempts to reduce EI's heavy exploitation by selecting a point such that a subsequent selection would yield the best expected improvement. Effectively it's a one-step look-ahead acquisition function. Specifically, a potential selection is evaluated by "fantasizing" at the location (drawing outputs from the probability distribution at the location and fitting a separate model to each) then, for each fantasy model, identifying how much improvement is obtained when using EI as a subsequent acquisition. Improvements are averaged over the fantasy models to assign a value to each potential selection and a final seletion is made based on the best value. The need to fantasize at each potential location makes KG a fairly expensive acquisition function and it can be slow to use, but in addition to getting stuck less than EI, KG can be used for multi-fidelity optimization problems.
+
+MaxValEntropy: Max Value Entropy selects points to minimize its uncertainty about the optimal value. This indirect approach allows it to heavily favor exploration before zooming in on promising spots in the input space. Its information-theoretic foundation also easily extends to the multi-fidelity setting (a low-fidelity candidate is selected if it helps minimize uncertainty about the high-fidelity optimum).
+
+# Tutorial: Risk-averse optimization

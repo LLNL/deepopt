@@ -220,14 +220,14 @@ def create_optimizer(network: Type[nn.Module], config: ConfigSettings) -> Union[
         optimizer = Adam(
             network.parameters(),
             lr=config.get_setting("learning_rate"),
-            weight_decay=config.get_setting("weight_decay_factor") if weight_decay else 0.0,
+            weight_decay=weight_decay,
         )
 
     elif opt_type == "SGD":
         optimizer = SGD(
             network.parameters(),
             lr=config.get_setting("learning_rate"),
-            weight_decay=config.get_setting("weight_decay_factor") if weight_decay else 0.0,
+            weight_decay=weight_decay,
         )
 
     else:
