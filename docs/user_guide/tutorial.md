@@ -99,6 +99,40 @@ python -c "import numpy as np; print(np.load('suggested_inputs.npy'))"
 ```
 
 ## Changing the neural network configuration
+Simply create a configuration yaml file with the desired entries (available settings described [here](configuration.md)). Then train and optimize the model as above, while specifying the configuration file:
+
+=== "DeepOpt API"
+    ```py title="run_deepopt.py" linenums="9"
+    model.learn(outfile=f'learner_{model_type}.ckpt',config_file='config.yaml') # (1)
+    ```
+
+    1. Train the neural network and save its state to a checkpoint file.
+
+=== "DeepOpt CLI"
+    ```bash
+    input_dim = 5
+    bounds = ""
+    for i in {1..input_dim-1}; do bounds+="[0,1],"; done
+    bounds+="[0,1]"
+    deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds -c config.yaml
+    ```
+
+
+=== "DeepOpt API"
+    ```py title="run_deepopt.py" linenums="10"
+    model.optimize(outfile='suggested_inputs.npy',
+                   learner_file=f'learner_{model_type}.ckpt',
+                   config_file=config.yaml,
+                   acq_method='EI') # (1)
+    ```
+
+    1. Use Expected Improvement to acquire new points based on the model saved in learner_file and save those points as a numpy array in outfile.
+
+=== "DeepOpt CLI"
+    ```bash
+    deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt \
+    -m delUQ -b $bounds -a EI -c config.yaml
+    ```
 
 # Tutorial: Iterative optimization
 
@@ -200,3 +234,4 @@ KG: Knowledge gradient attempts to reduce EI's heavy exploitation by selecting a
 MaxValEntropy: Max Value Entropy selects points to minimize its uncertainty about the optimal value. This indirect approach allows it to heavily favor exploration before zooming in on promising spots in the input space. Its information-theoretic foundation also easily extends to the multi-fidelity setting (a low-fidelity candidate is selected if it helps minimize uncertainty about the high-fidelity optimum).
 
 # Tutorial: Risk-averse optimization
+To do risk-averse optimization, simply specify the risk_measure (CLI: --risk-measure), risk_level (CLI: --risk-level), risk_n_deltas (CLI: --risk_n_deltas), and x_stddev (CLI: --X-stddev) when calling optimize. The available risk measures are VaR (variance at risk) and CVaR (conditional variance at resk). The risk level is between 0 and 1 and sets the corresponding alpha value (see the BoTorch [example](https://botorch.org/tutorials/risk_averse_bo_with_environmental_variables) for more details). risk_n_deltas sets the number of samples to draw for input perturbations (more accuracy and longer run time for larger values). x_stddev sets the size of the input perturbations in each dimension (can provide a list to specify dimension-by-dimension or a scalar to set the same pertrubation for all inputs). Currently only EI, NEI, and KG acquisition functions support risk measures.
