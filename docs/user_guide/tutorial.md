@@ -37,18 +37,19 @@ If you're using the DeepOpt API, you'll first need to load the `ConfigSettings` 
 from deepopt.configuration import ConfigSettings
 from deepopt.deepopt_cli import get_deepopt_model
 
-model_type = 'delUQ' # (1)
-model_class = get_deepopt_model(model_type=model_type) # (2)
-cs = ConfigSettings(model_type=model_type) #(3)
-bounds = torch.FloatTensor(input_dim*[[0,1]]).T  # (4)
-model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  # (5)
+input_dim = 5 #(1)
+model_type = 'delUQ' # (2)
+model_class = get_deepopt_model(model_type=model_type) # (3)
+cs = ConfigSettings(model_type=model_type) #(4)
+bounds = torch.FloatTensor(input_dim*[[0,1]]).T  # (5)
+model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  # (6)
 ```
-
-1. Set the model type to use throughout the script.
-2. Set the model class associated with the selected model type (in this case `DelUQModel`)
-3. This sets up the neural network configuration (more generally the model configuration). Since we don't pass a configuration file, the default configuration will be used.
-4. Learning and optimizing will take place within these input bounds
-5. Model is loaded the same way as with GP, but now we are using `DelUQModel`
+1. Input dimension must match data file (`sims.npz` in this case)
+2. Set the model type to use throughout the script.
+3. Set the model class associated with the selected model type (in this case `DelUQModel`)
+4. This sets up the neural network configuration (more generally the model configuration). Since we don't pass a configuration file, the default configuration will be used.
+5. Learning and optimizing will take place within these input bounds
+6. Model is loaded the same way as with GP, but now we are using `DelUQModel`
 
 Training and optimizing are done as in [Getting Started](./index.md#getting-started-with-deepopt), with the array of new points being recorded in 'suggested_inputs.npy':
 
