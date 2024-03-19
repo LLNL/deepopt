@@ -21,6 +21,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from deepopt.configuration import ConfigSettings
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
+from deepopt.lit import LitDelUQ
+
+import lightning as L
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -62,9 +65,15 @@ class DeltaEnc(Model):
             self.multi_network = False
             self.n_epochs = config.get_setting("n_epochs")
             self.actual_batch_size = min(config.get_setting("batch_size"), len(X_train))
+            
+        self.lit_network = LitDelUQ(
+            network=network,
+            optimizer=optimizer,
+            target=target
+        )
 
-        self.f_predictor = network
-        self.f_optimizer = optimizer
+        # self.f_predictor = network
+        # self.f_optimizer = optimizer
         self.config = config
         self.device = network.device  # might not work for multi-networks
         self.multi_fidelity = multi_fidelity
@@ -209,32 +218,35 @@ class DeltaEnc(Model):
         else:
             data = TensorDataset(self.X_train_nn, self.y_train_nn)
             loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
-            self.f_predictor.train()
-            for _ in range(self.n_epochs):
-                avg_loss = 0.0
+            trainer = L.Trainer(max_epochs=self.n_epochs,devices='auto',accelerator='auto')
+            trainer.fit(model=self.lit_network,train_dataloaders=loader)
+            
+            # self.f_predictor.train()
+            # for _ in range(self.n_epochs):
+            #     avg_loss = 0.0
 
-                for _, (xi, yi) in enumerate(loader):
-                    xi = xi.to(self.device)
-                    yi = yi.to(self.device)
+            #     for _, (xi, yi) in enumerate(loader):
+            #         xi = xi.to(self.device)
+            #         yi = yi.to(self.device)
 
-                    xi = self.f_predictor.input_mapping(xi)
-                    flipped_x = torch.flip(xi, [0])
-                    diff_x = xi - flipped_x
-                    inp = torch.cat([flipped_x, diff_x], axis=1)
+            #         xi = self.f_predictor.input_mapping(xi)
+            #         flipped_x = torch.flip(xi, [0])
+            #         diff_x = xi - flipped_x
+            #         inp = torch.cat([flipped_x, diff_x], axis=1)
 
-                    if self.target == "y":
-                        out = yi
-                    else:
-                        flipped_y = torch.flip(yi, [0])
-                        diff_y = yi - flipped_y
-                        out = diff_y
+            #         if self.target == "y":
+            #             out = yi
+            #         else:
+            #             flipped_y = torch.flip(yi, [0])
+            #             diff_y = yi - flipped_y
+            #             out = diff_y
 
-                    out_hat = self.f_predictor(inp)
-                    self.f_optimizer.zero_grad()
-                    f_loss = self.loss_fn(out_hat.float(), out.float())
-                    f_loss.backward()
-                    self.f_optimizer.step()
-                    avg_loss += f_loss.item() / len(loader)
+            #         out_hat = self.f_predictor(inp)
+            #         self.f_optimizer.zero_grad()
+            #         f_loss = self.loss_fn(out_hat.float(), out.float())
+            #         f_loss.backward()
+            #         self.f_optimizer.step()
+            #         avg_loss += f_loss.item() / len(loader)
 
     def save_ckpt(self, path: str, name: str):
         """
@@ -244,9 +256,9 @@ class DeltaEnc(Model):
         :param name: The name of the checkpoint file
         """
         state = {"epoch": self.n_epochs}
-        state["state_dict"] = self.f_predictor.state_dict()
-        state["B"] = self.f_predictor.B
-        state["opt_state_dict"] = self.f_optimizer.state_dict()
+        state["state_dict"] = self.lit_network.network.state_dict()
+        state["B"] = self.lit_network.network.B
+        state["opt_state_dict"] = self.lit_network.optimizer.state_dict()
         filename = path + "/" + name + ".ckpt"
         torch.save(state, filename)
         print("Saved Ckpts")
@@ -259,8 +271,8 @@ class DeltaEnc(Model):
         :param name: The name of the checkpoint file
         """
         saved_state = torch.load(os.path.join(path, name + ".ckpt"), map_location=self.device)
-        self.f_predictor.load_state_dict(saved_state["state_dict"])
-        self.f_predictor.B = saved_state["B"]
+        self.lit_network.network.load_state_dict(saved_state["state_dict"])
+        self.lit_network.network.B = saved_state["B"]
 
     def _map_delta_model(self, ref: torch.Tensor, query: torch.Tensor) -> torch.Tensor:
         """
@@ -271,11 +283,11 @@ class DeltaEnc(Model):
 
         :returns: The predicted output tensor
         """
-        ref = self.f_predictor.input_mapping(ref)
-        query = self.f_predictor.input_mapping(query)
+        ref = self.lit_network.network.input_mapping(ref)
+        query = self.lit_network.network.input_mapping(query)
         diff = query - ref
         samps = torch.cat([ref, diff], 1)
-        pred = self.f_predictor(samps)
+        pred = self.lit_network.network(samps)
         return pred
 
     def posterior(
@@ -419,7 +431,7 @@ class DeltaEnc(Model):
 
         q_combine_samples = q_move.expand(n_ref, *q_move.shape).reshape(-1, *self.batch_shape, self.input_dim)
         q_reshape = q_combine_samples.reshape(q_combine_samples.shape[0], -1)
-        self.f_predictor.eval()
+        self.lit_network.network.eval()
         val = self._map_delta_model(ref, q_reshape.float())
         if self.target != "y":
             val += ref_y
@@ -530,16 +542,16 @@ class DeltaEnc(Model):
             if hasattr(self, "input_transform"):
                 fantasy_model.input_transform = self.input_transform
 
-            state_dict_prev = self.f_predictor.state_dict()
-            state_dict_new = fantasy_model.f_predictor.state_dict()
+            state_dict_prev = self.lit_network.network.state_dict()
+            state_dict_new = fantasy_model.lit_network.network.state_dict()
             state_dict_new = {
                 key_new: state_dict_prev[key_prev].expand(state_dict_new[key_new].shape).detach().clone()
                 for (key_new, key_prev) in zip(state_dict_new, state_dict_prev)
             }
 
-            fantasy_model.f_predictor.load_state_dict(state_dict_new)
-            fantasy_model.f_predictor.B = self.f_predictor.B.tile(
-                (1, fantasy_model.f_predictor.B.shape[1] // self.f_predictor.B.shape[1])
+            fantasy_model.lit_network.network.load_state_dict(state_dict_new)
+            fantasy_model.lit_network.network.B = self.lit_network.network.B.tile(
+                (1, fantasy_model.lit_network.network.B.shape[1] // self.lit_network.network.B.shape[1])
             )
             fantasy_model.fit()
             fantasy_model.eval()
