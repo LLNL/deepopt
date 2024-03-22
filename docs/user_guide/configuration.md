@@ -4,7 +4,7 @@
 
     Currently only delUQ models can be configured; GP models will be run as-is.
 
-The DeepOpt library allows users to define custom configurations for training your model and conducting Bayesian optimization. To ensure a flexible and user-friendly experience, DeepOpt supports configuration through YAML and JSON files. This guide is designed to walk you through the available otpions and best practices for setting up your configuration files.
+The DeepOpt library allows users to define custom configurations for training your model and conducting Bayesian optimization. To ensure a flexible and user-friendly experience, DeepOpt supports configuration through YAML and JSON files. This guide is designed to walk you through the available options and best practices for setting up your configuration files.
 
 ## The Base Configuration Options
 
@@ -12,10 +12,10 @@ There are several configuration options that are standard in a configuration fil
 
 | Option           | Description | Default   |
 | ------------     | ----------- | -------   |
-| ff               | To use "Fourier features" set this to True (otherwise False). When using Fourier features, a Fourier transform with learnable frequencies is implemented prior to the neural network layer. The number of such frequencies is set by the "mapping_size" parameter in the configuration file. Using Fourier features can help the network better learn small-scale features in the data without smearing them out.        | True      |
-| activation       | The activation function to use. Currently supported activations are "relu", "tanh", "identity", and "siren". The "identity" activation will remove any non-linearity in the network, reducing the surrogate to linear regression. The "siren" activaton uses a sine function and initializes the layer weights differently than usual. For more details see the SIREN paper.        | relu      |
+| ff               | To use "Fourier features" set this to True (otherwise False). When using Fourier features, a Fourier transform with learnable frequencies is implemented prior to the neural network layer. The number of such frequencies is set by the `mapping_size` parameter in the configuration file. Using Fourier features can help the network better learn small-scale features in the data without smearing them out.        | True      |
+| activation       | The activation function to use. Currently supported activations are "relu", "tanh", "identity", and "siren". The "identity" activation will remove any non-linearity in the network, reducing the surrogate to linear regression. The "siren" activaton uses a sine function and initializes the layer weights differently than usual. For more details see (the SIREN paper.)[https://arxiv.org/abs/2006.09661]        | relu      |
 | w0 | The "w0" parameter to use for initializing weights in a SIREN network. The weight matrix in each layers is w0*W, where W is initalized uniformly on -1/input_dim to 1/input_dim in the first layer and uniformly on -sqrt(6/layer_dim)/w0 to sqrt(6/layer_dim)/w0 in all other layers. | 30 |
-| n_layers         | The total number of layers in the neural network. This includes the first and last layer, so n_layers=4 will have 2 hidden layers.        | 4         |
+| n_layers         | The total number of layers in the neural network. This includes the first and last layer, so `n_layers=4` will have 2 hidden layers.        | 4         |
 | hidden_dim       | The number of neurons in each hidden layer (width of the network).        | 128       |
 | mapping_size     | The number of Fourier frequencies to learn when using Fourier features        | 128       |
 | dropout          | Whether to use dropout regularization (True) or not (False)        | True      |
