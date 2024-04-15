@@ -12,3 +12,4 @@ scipy
 click
 pyyaml
 psutil
+matplotlib

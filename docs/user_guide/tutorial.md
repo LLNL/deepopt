@@ -143,56 +143,84 @@ Simply create a configuration yaml file with the desired entries (available sett
 
 ## Tutorial: Iterative optimization
 
-Typical Bayesian optimization workflows will have an iterative structure, as proposed candidates from one iteration are added to the training of the surrogate in the following iteration. We demonstrate how to use the DeepOpt API to accomplish this.
+Typical Bayesian optimization workflows will have an iterative structure, as proposed candidates from one iteration are added to the training of the surrogate in the following iteration. We demonstrate how to use the DeepOpt API to accomplish this. A similar workflow is possible in CLI, but it is best to use a workflow manager such as Merlin[https://merlin.readthedocs.io/en/latest/].
 
-=== "DeepOpt API"
-    ```py title='iterative_optimization.py'
-    import torch
-    import numpy as np
-    from deepopt.configuration import ConfigSettings
-    from deepopt.deepopt_cli import get_deepopt_model
+```py title='iterative_optimization.py'
+import torch
+import numpy as np
+from deepopt.configuration import ConfigSettings
+from deepopt.deepopt_cli import get_deepopt_model
 
-    def objective(X):
-        return -(X**2).sum(axis=1)
+def objective(X):
+    return -(X**2).sum(axis=1)
 
-    input_dim = 5
-    num_initial_points = 10
+input_dim = 5
+num_initial_points = 10
 
-    X_init = torch.rand(num_initial_points, input_dim)
-    y_init = objective(X_init)
+X_init = torch.rand(num_initial_points, input_dim)
+y_init = objective(X_init)
 
-    np.savez("points_iter0.npz",X=X_init,y=y_init)
+np.savez("points_iter0.npz",X=X_init,y=y_init) #We'll store all data in npz files with keys 'X' for inputs and 'y' for outputs
 
-    model_type = "GP"
-    cs = ConfigSettings(model_type=model_type)   
-    model_class = get_deepopt_model(model_type) 
-    bounds = torch.FloatTensor(input_dim*[[0,1]]).T
+model_type = "GP"
+cs = ConfigSettings(model_type=model_type)   
+model_class = get_deepopt_model(model_type) 
+bounds = torch.FloatTensor(input_dim*[[0,1]]).T
 
-    n_iterations = 20
-    for i in range(n_iterations):
-        print(f"---------------\n  ITERATION {i+1}  \n---------------")
-        data_prev_file = f"points_iter{i}.npz" # previous points
-        candidates_file = f"suggested_inputs_iter{i+1}.npy" # save new proposed inputs to evaluate here
-        ckpt_file = f"learner_{model_type}_iter{i+1}.ckpt" # save model for this iteration here
+n_iterations = 20
+for i in range(n_iterations):
+    print(f"---------------\n  ITERATION {i+1}  \n---------------")
+    data_prev_file = f"points_iter{i}.npz" # previous points
+    candidates_file = f"suggested_inputs_iter{i+1}.npy" # save new proposed inputs to evaluate here
+    ckpt_file = f"learner_{model_type}_iter{i+1}.ckpt" # save model for this iteration here
 
-        # Train model on previous points, then propose new points using Expected Improvement
-        model = model_class(data_file=data_prev_file,bounds=bounds,config_settings=cs)
-        model.learn(outfile=ckpt_file)
-        model.optimize(outfile=candidates_file, learner_file=ckpt_file, acq_method="EI")
+    # Train model on previous points, then propose new points using Expected Improvement
+    model = model_class(data_file=data_prev_file,bounds=bounds,config_settings=cs)
+    model.learn(outfile=ckpt_file)
+    model.optimize(outfile=candidates_file, learner_file=ckpt_file, acq_method="EI")
 
-        # Load previous input & output values
-        data_prev = np.load(data_prev_file)
-        X_prev = data_prev["X"]
-        y_prev = data_prev["y"]
+    # Load previous input & output values
+    data_prev = np.load(data_prev_file)
+    X_prev = data_prev["X"]
+    y_prev = data_prev["y"]
 
-        X_new = np.load(candidates_file) # Load proposed inputs
-        y_new = objective(X_new) # Evaluate proposed inputs
+    X_new = np.load(candidates_file) # Load proposed inputs
+    y_new = objective(X_new) # Evaluate proposed inputs
 
-        # Concatenate new input & output values with previous and save
-        X = np.concatenate([X_prev,X_new],axis=0)
-        y = np.concatenate([y_prev,y_new],axis=0)
-        np.savez(f"points_iter{i+1}.npz",X=X,y=y)
-    ```
+    # Concatenate new input & output values with previous and save
+    X = np.concatenate([X_prev,X_new],axis=0)
+    y = np.concatenate([y_prev,y_new],axis=0)
+    np.savez(f"points_iter{i+1}.npz",X=X,y=y)
+```
+
+This workflow produces `n_iterations` npy files of suggested inputs and `n_iterations + 1` npz files of points. The npy files contain just the inputs to call the objective function with, so are redundant (in this example) with the npz files that contain both. We can visualize the optimization with the following script:
+
+```py title='plot_optimization.py
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Make sure these match the iterative_optimization.py file
+num_initial_points = 10
+num_iterations = 20
+
+pts = np.load(f'points_iter{num_iterations}.npz') # Load last collection of points
+y = pts['y'] # Extract objective values
+pts_per_iteration = (len(y)-num_initial_points)//num_iterations # Work out how many points were proposed per iteration
+iters = np.concatenate([np.zeros(num_initial_points),np.repeat(np.arange(1,num_iterations+1),pts_per_iteration)]) # Set the iteration value of all points
+plt.scatter(iters,y) # Plot all proposal results vs. iteration
+plt.xlabel('Iterations')
+plt.xticks(np.arange(num_iterations+1))
+plt.ylabel('Objective value')
+
+#Find running max:
+max_byiter = np.zeros(num_iterations+1) # This will store max for each iteration
+max_byiter[0] = np.max(y[:num_initial_points]) # Max of initial points
+for i in range(1,num_iterations+1):
+    max_byiter[i] = np.max(y[num_initial_points+(i-1)*pts_per_iteration:num_initial_points+i*pts_per_iteration]) # Max of each iteration (when multiple proposals)
+plt.plot(np.arange(num_iterations+1),np.maximum.accumulate(max_byiter),label='running max') # Add running max to plot
+plt.legend()
+plt.show()
+```
 
 ## Tutorial: Multi-fidelity optimization
 Performing multi-fidelity optimization with DeepOpt requires only that the data files have the last input column as a fidelity, with integer values ranging from 0 to number of fidelities - 1, and to pass a list of fidelity costs to the "optimize" method (the length of the list must match the number of fidelities). In addition, the acquisition function must be appropriate for multi-fidelity optimization.
