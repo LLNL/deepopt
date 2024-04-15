@@ -19,8 +19,8 @@ There are several configuration options that are standard in a configuration fil
 | hidden_dim       | The number of neurons in each hidden layer (width of the network).        | 128       |
 | mapping_size     | The number of Fourier frequencies to learn when using Fourier features        | 128       |
 | dropout          | Whether to use dropout regularization (True) or not (False)        | True      |
-| dropout_prob     | When using dropout, this sets the probability of dropping a neuron.        | 0.2       |
-| activation_first | If True, the activation function is applied first followed by batchnorm and dropout. Otherwise, the order is dropout-activation-batchnorm.        | True      |
+| dropout_prob     | When using `dropout`, this sets the probability of dropping a neuron.        | 0.2       |
+| activation_first | If True, the activation function is applied first followed by batchnorm and `dropout`. Otherwise, the order is `dropout`-activation-batchnorm.        | True      |
 | learning_rate    | The learning rate to use in the optimizer. This is optimized during hyperparameter tuning, so it is not necessary to set precisely.        | 0.001     |
 | n_epochs         | The number of epochs to train for. We recommend keeping a large number (>=1000) when using smaller datasets.        | 1000      |
 | batch_size       | The batch size to use during training. If larger than dataset size, the entire dataset will be used as a single batch during each epoch of training.        | 1000      |
@@ -29,8 +29,3 @@ There are several configuration options that are standard in a configuration fil
 | variance         | The scale of the frequency distribution ("dist") when using Fourier features. A "uniform" distribution is constant between +/- scale, a "gaussian" uses scale as the standard deviation, and the "laplace" distribution uses scale as the exponential decay factor.</br></br> This parameter is optimized during hyperparameter tuning, so it is not necessary to set precisely.        | 0.0015625 |
 | batchnorm        | Whether to use batchnorm regularization (True) or not (False)        | False     |
 | weight_decay     | Strength of weight decay (L2 penalty) to use during optimization        | 0     |
-<!-- | cutmix           | Text        | False     |
-| se               | Text        | False     |
-| positive_output  | Text        | False     |
-| extrapolation_a1 | Text        | 0.05      |
-| extrapolation_a2 | Text        | 0.95      | -->
