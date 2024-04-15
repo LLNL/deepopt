@@ -143,7 +143,7 @@ Simply create a configuration yaml file with the desired entries (available sett
 
 ## Tutorial: Iterative optimization
 
-Typical Bayesian optimization workflows will have an iterative structure, as proposed candidates from one iteration are added to the training of the surrogate in the following iteration. We demonstrate how to use the DeepOpt API to accomplish this. A similar workflow is possible in CLI, but it is best to use a workflow manager such as Merlin[https://merlin.readthedocs.io/en/latest/].
+Typical Bayesian optimization workflows will have an iterative structure, as proposed candidates from one iteration are added to the training of the surrogate in the following iteration. We demonstrate how to use the DeepOpt API to accomplish this. A similar workflow is possible in CLI, but it is best to use a workflow manager such as [Merlin](https://merlin.readthedocs.io/en/latest/).
 
 ```py title='iterative_optimization.py'
 import torch
@@ -222,16 +222,26 @@ plt.legend()
 plt.show()
 ```
 
+The plot should display a running max that converges to the objective maximum (0 in this example), while individual proposals will be a mix of high values (at or near the running max) from succesfuly exploitation/exploration and low values (far below the running max) from unsuccesful exploration.
+
 ## Tutorial: Multi-fidelity optimization
-Performing multi-fidelity optimization with DeepOpt requires only that the data files have the last input column as a fidelity, with integer values ranging from 0 to number of fidelities - 1, and to pass a list of fidelity costs to the "optimize" method (the length of the list must match the number of fidelities). In addition, the acquisition function must be appropriate for multi-fidelity optimization.
+In this tutorial, we'll walk through how to accomplish multi-fidelity optimization with DeepOpt. We'll start by copying the `generate_simulation_inputs.py` and `run_deepopt.py` file from the [Getting Started page](./index.md#getting-started-with-deepopt):
 
-We show here the necessary changes to "generate_simulation_inputs.py" and the optimize call from the [Getting Started](./index.md#getting-started-with-deepopt) page:
+<!-- Performing multi-fidelity optimization with DeepOpt requires only that the data files have the last input column as a fidelity, with integer values ranging from 0 to number of fidelities - 1, and to pass a list of fidelity costs to the "optimize" method (the length of the list must match the number of fidelities). In addition, the acquisition function must be appropriate for multi-fidelity optimization.
 
-```py title="generate_simulation_inputs_mf.py" linenums="1"
+We show here the necessary changes to "generate_simulation_inputs.py" and the optimize call from the [Getting Started](./index.md#getting-started-with-deepopt) page: -->
+```bash
+cp generate_simulation_inputs.py generate_simulation_inputs_mf.py
+cp run_deepopt.py run_deepopt_mf.py
+```
+
+Performing multi-fidelity optimization with DeepOpt requires that the data files have the last input column as a fidelity, with integer values ranging from 0 to number of fidelities - 1. We can generate this input file by changing two lines in the generate_simulation_inputs.py file:
+
+```py title="generate_simulation_inputs_mf.py" linenums=0, hl_lines=8
 import torch
 import numpy as np
 
-input_dim = 5
+input_dim = 5 # Last dimension will be used for fidelity
 num_points = 10
 
 X = torch.rand(num_points, input_dim)
@@ -241,14 +251,40 @@ y = -(X**2).sum(axis=1) # (1)
 np.savez('sims.npz', X=X, y=y)
 ```
 
-1. In this simple example, the high fidelity paraboloid is shifted one unti relative to the low fidelity paraboloid.
+1. This line now produces paraboloids at two fidelities, with the high fidelity paraboloid shifted one unit relative to the low fidelity paraboloid.
+
+We run this script with 
+```bash
+python generate_simulation_inputs_mf.py
+```
+
+Additionally, to achieve multi-fidelity optimization with DeepOpt you must:
+
+1. Enable multi-fidelity in your model
+2. Pass a list of fidelity costs to the optimize method (the length of the list must match the number of fidelities)
+3.  Select an acquisition function that's appropriate for multi-fidelity optimization (currently only Knowledge Gradient and Max Value Entropy are supported)
+
+Below, we show how to modify the optimize call from run_deepopt.py to accommodate these changes, and also how to achieve this same functionality from the command line:
 
 === "DeepOpt API"
 
-    ```py linenums="6"
-    model.optimize(outfile="suggested_inputs.npy",
-                   learner_file=f"learner_{model_type}.ckpt",
-                   acq_method="KG",fidelity_cost=[1,6]) # (1)
+    ```py linenums=0 hl_lines=11,13-15
+        import torch
+        from deepopt.configuration import ConfigSettings
+        from deepopt.deepopt_cli import get_deepopt_model
+
+        input_dim = 5
+        model_type = "GP"  # 
+        bounds = torch.FloatTensor(input_dim*[[0,1]]).T  # 
+
+        deepopt_model = get_deepopt_model(model_type)  #
+        cs = ConfigSettings(model_type=model_type)
+        model = deepopt_model(data_file="sims.npz", bounds=bounds, config_settings=cs, multi_fidelity=True)  #
+        model.learn(outfile=f"learner_{model_type}.ckpt") #
+        model.optimize(outfile="suggested_inputs.npy",
+                    learner_file=f"learner_{model_type}.ckpt",
+                    acq_method="KG",fidelity_cost=[1,6]) #
+
     ```
 
     1. We use the Knowledge Gradient (KG) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
@@ -262,6 +298,11 @@ np.savez('sims.npz', X=X, y=y)
     ```
 
     1. We use the Knowledge Gradient (KG) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
+
+The API script can be run with
+```bash
+python run_deepopt_mf.py
+```
 
 ## Tutorial: Acquisition functions
 There are currently four acquisition functions available for single-fidelity optimization: Expected Improvement (EI), Noisy Expected Improvement (NEI), Knowledge Gradient (KG), and Max Value Entropy (MaxValEntropy). The last two (KG & Max Value Entropy) are also available for multi-fidelity optimization. These acquisition functions are built around the associated (BoTorch acquisition functions)[https://botorch.org/api/acquisition.html#acquisitionfunction]: qExpectedImprovement, qNoisyExpectedImprovement, qKnowledgeGradient, and qMaxValueEntropy. We briefly describe the strengths and weaknesses of each acquisition.
