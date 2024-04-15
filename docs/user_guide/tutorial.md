@@ -58,7 +58,7 @@ model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  # 
 Training and optimizing are done as in [Getting Started](./index.md#getting-started-with-deepopt), with the array of new points being recorded in 'suggested_inputs.npy':
 
 === "DeepOpt API"
-    ```py title="run_deepopt.py" linenums="9"
+    ```py title="run_deepopt.py" linenums="11"
     model.learn(outfile=f'learner_{model_type}.ckpt') # (1)
     ```
 
@@ -89,7 +89,7 @@ The delUQ model has 4 entries in the checkpoint dictionary:
 Now that we saved the trained model, we can use it to propose new candidate points:
 
 === "DeepOpt API"
-    ```py title="run_deepopt.py" linenums="10"
+    ```py title="run_deepopt.py" linenums="12"
     model.optimize(outfile='suggested_inputs.npy',
                    learner_file=f'learner_{model_type}.ckpt',
                    acq_method='EI') # (1)
@@ -112,7 +112,7 @@ python -c "import numpy as np; print(np.load('suggested_inputs.npy'))"
 Simply create a configuration yaml file with the desired entries (available settings described [here](configuration.md)). Then train and optimize the model as above, while specifying the configuration file:
 
 === "DeepOpt API"
-    ```py title="run_deepopt.py" linenums="9"
+    ```py title="run_deepopt.py" linenums="11"
     model.learn(outfile=f'learner_{model_type}.ckpt',
     config_file='config.yaml') # (1)
 
@@ -145,7 +145,7 @@ Simply create a configuration yaml file with the desired entries (available sett
 
 Typical Bayesian optimization workflows will have an iterative structure, as proposed candidates from one iteration are added to the training of the surrogate in the following iteration. We demonstrate how to use the DeepOpt API to accomplish this. A similar workflow is possible in CLI, but it is best to use a workflow manager such as [Merlin](https://merlin.readthedocs.io/en/latest/).
 
-```py title='iterative_optimization.py'
+```py title='iterative_optimization.py' linenums="1"
 import torch
 import numpy as np
 from deepopt.configuration import ConfigSettings
@@ -160,7 +160,8 @@ num_initial_points = 10
 X_init = torch.rand(num_initial_points, input_dim)
 y_init = objective(X_init)
 
-np.savez("points_iter0.npz",X=X_init,y=y_init) #We'll store all data in npz files with keys 'X' for inputs and 'y' for outputs
+#We'll store all data in npz files with keys 'X' for inputs and 'y' for outputs
+np.savez("points_iter0.npz",X=X_init,y=y_init) 
 
 model_type = "GP"
 cs = ConfigSettings(model_type=model_type)   
@@ -171,8 +172,8 @@ n_iterations = 20
 for i in range(n_iterations):
     print(f"---------------\n  ITERATION {i+1}  \n---------------")
     data_prev_file = f"points_iter{i}.npz" # previous points
-    candidates_file = f"suggested_inputs_iter{i+1}.npy" # save new proposed inputs to evaluate here
-    ckpt_file = f"learner_{model_type}_iter{i+1}.ckpt" # save model for this iteration here
+    candidates_file = f"suggested_inputs_iter{i+1}.npy" # save new proposed inputs to evaluate
+    ckpt_file = f"learner_{model_type}_iter{i+1}.ckpt" # save model for this iteration
 
     # Train model on previous points, then propose new points using Expected Improvement
     model = model_class(data_file=data_prev_file,bounds=bounds,config_settings=cs)
@@ -195,7 +196,7 @@ for i in range(n_iterations):
 
 This workflow produces `n_iterations` npy files of suggested inputs and `n_iterations + 1` npz files of points. The npy files contain just the inputs to call the objective function with, so are redundant (in this example) with the npz files that contain both. We can visualize the optimization with the following script:
 
-```py title='plot_optimization.py
+```py title='plot_optimization.py' linenums="1"
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -206,7 +207,8 @@ num_iterations = 20
 pts = np.load(f'points_iter{num_iterations}.npz') # Load last collection of points
 y = pts['y'] # Extract objective values
 pts_per_iteration = (len(y)-num_initial_points)//num_iterations # Work out how many points were proposed per iteration
-iters = np.concatenate([np.zeros(num_initial_points),np.repeat(np.arange(1,num_iterations+1),pts_per_iteration)]) # Set the iteration value of all points
+iters = np.concatenate([np.zeros(num_initial_points),np.repeat(
+    np.arange(1,num_iterations+1),pts_per_iteration)]) # Set the iteration value of all points
 plt.scatter(iters,y) # Plot all proposal results vs. iteration
 plt.xlabel('Iterations')
 plt.xticks(np.arange(num_iterations+1))
@@ -216,28 +218,28 @@ plt.ylabel('Objective value')
 max_byiter = np.zeros(num_iterations+1) # This will store max for each iteration
 max_byiter[0] = np.max(y[:num_initial_points]) # Max of initial points
 for i in range(1,num_iterations+1):
-    max_byiter[i] = np.max(y[num_initial_points+(i-1)*pts_per_iteration:num_initial_points+i*pts_per_iteration]) # Max of each iteration (when multiple proposals)
-plt.plot(np.arange(num_iterations+1),np.maximum.accumulate(max_byiter),label='running max') # Add running max to plot
+    max_byiter[i] = np.max(y[num_initial_points+(
+        i-1)*pts_per_iteration:num_initial_points+i*pts_per_iteration]) # Max of each iteration (when multiple proposals)
+plt.plot(np.arange(num_iterations+1),np.maximum.accumulate(
+    max_byiter),label='running max') # Add running max to plot
 plt.legend()
 plt.show()
 ```
+The generated figure should look like this: ![Optimization of an inverted paraboloid using Expected Improvement](../imgs/optimization_plot.png)
 
-The plot should display a running max that converges to the objective maximum (0 in this example), while individual proposals will be a mix of high values (at or near the running max) from succesfuly exploitation/exploration and low values (far below the running max) from unsuccesful exploration.
+The plot shows a running max that converges to the objective maximum (0 in this example), while individual proposals are a mix of high values (at or near the running max) from succesfuly exploitation/exploration and low values (far below the running max) from unsuccesful exploration.
 
 ## Tutorial: Multi-fidelity optimization
 In this tutorial, we'll walk through how to accomplish multi-fidelity optimization with DeepOpt. We'll start by copying the `generate_simulation_inputs.py` and `run_deepopt.py` file from the [Getting Started page](./index.md#getting-started-with-deepopt):
 
-<!-- Performing multi-fidelity optimization with DeepOpt requires only that the data files have the last input column as a fidelity, with integer values ranging from 0 to number of fidelities - 1, and to pass a list of fidelity costs to the "optimize" method (the length of the list must match the number of fidelities). In addition, the acquisition function must be appropriate for multi-fidelity optimization.
-
-We show here the necessary changes to "generate_simulation_inputs.py" and the optimize call from the [Getting Started](./index.md#getting-started-with-deepopt) page: -->
 ```bash
 cp generate_simulation_inputs.py generate_simulation_inputs_mf.py
 cp run_deepopt.py run_deepopt_mf.py
 ```
 
-Performing multi-fidelity optimization with DeepOpt requires that the data files have the last input column as a fidelity, with integer values ranging from 0 to number of fidelities - 1. We can generate this input file by changing two lines in the generate_simulation_inputs.py file:
+Performing multi-fidelity optimization with DeepOpt requires that the data files have the last input column as a fidelity, with integer values ranging from 0 to number of fidelities - 1. We can generate this input file by changing one line in the `generate_simulation_inputs.py` file:
 
-```py title="generate_simulation_inputs_mf.py" linenums=0, hl_lines=8
+```py title="generate_simulation_inputs_mf.py" linenums="1", hl_lines="8"
 import torch
 import numpy as np
 
@@ -264,33 +266,31 @@ Additionally, to achieve multi-fidelity optimization with DeepOpt you must:
 2. Pass a list of fidelity costs to the optimize method (the length of the list must match the number of fidelities)
 3.  Select an acquisition function that's appropriate for multi-fidelity optimization (currently only Knowledge Gradient and Max Value Entropy are supported)
 
-Below, we show how to modify the optimize call from run_deepopt.py to accommodate these changes, and also how to achieve this same functionality from the command line:
+Below, we show how to modify the optimize call from `run_deepopt.py` to accommodate these changes, and also how to achieve this same functionality from the command line:
 
 === "DeepOpt API"
+    ```py title="run_deepopt_mf.py" linenums="1" hl_lines="11-16"
+    import torch
+    from deepopt.configuration import ConfigSettings
+    from deepopt.deepopt_cli import get_deepopt_model
 
-    ```py linenums=0 hl_lines=11,13-15
-        import torch
-        from deepopt.configuration import ConfigSettings
-        from deepopt.deepopt_cli import get_deepopt_model
+    input_dim = 5
+    model_type = "GP" 
+    bounds = torch.FloatTensor(input_dim*[[0,1]]).T 
 
-        input_dim = 5
-        model_type = "GP"  # 
-        bounds = torch.FloatTensor(input_dim*[[0,1]]).T  # 
-
-        deepopt_model = get_deepopt_model(model_type)  #
-        cs = ConfigSettings(model_type=model_type)
-        model = deepopt_model(data_file="sims.npz", bounds=bounds, config_settings=cs, multi_fidelity=True)  #
-        model.learn(outfile=f"learner_{model_type}.ckpt") #
-        model.optimize(outfile="suggested_inputs.npy",
-                    learner_file=f"learner_{model_type}.ckpt",
-                    acq_method="KG",fidelity_cost=[1,6]) #
-
+    deepopt_model = get_deepopt_model(model_type)
+    cs = ConfigSettings(model_type=model_type)
+    model = deepopt_model(data_file="sims.npz", bounds=bounds, 
+    config_settings=cs, multi_fidelity=True)
+    model.learn(outfile=f"learner_{model_type}.ckpt")
+    model.optimize(outfile="suggested_inputs.npy",
+                learner_file=f"learner_{model_type}.ckpt",
+                acq_method="KG",fidelity_cost=[1,6]) # (1)
     ```
 
     1. We use the Knowledge Gradient (KG) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
 
 === "DeepOpt CLI"
-
     ```bash
     deepopt optimize -i sims.npz -l learner_GP.ckpt -o suggested_inputs.npy \
     -b "[[0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]" \
@@ -302,6 +302,93 @@ Below, we show how to modify the optimize call from run_deepopt.py to accommodat
 The API script can be run with
 ```bash
 python run_deepopt_mf.py
+```
+
+We can make an iterative optimization workflow similar to the single-fidelity case above:
+```py title='iterative_optimization_mf.py' linenums="1"
+import torch
+import numpy as np
+from deepopt.configuration import ConfigSettings
+from deepopt.deepopt_cli import get_deepopt_model
+
+def objective(X):
+    return -(X**2).sum(axis=1)
+
+input_dim = 5
+num_initial_points = 10
+
+X_init = torch.rand(num_initial_points, input_dim)
+X_init[:,-1] = X_init[:,-1].round()
+y_init = objective(X_init)
+
+#We'll store all data in npz files with keys 'X' for inputs and 'y' for outputs
+np.savez("points_iter0.npz",X=X_init,y=y_init) 
+
+model_type = "GP"
+cs = ConfigSettings(model_type=model_type)   
+model_class = get_deepopt_model(model_type) 
+bounds = torch.FloatTensor(input_dim*[[0,1]]).T
+
+n_iterations = 20
+for i in range(n_iterations):
+    print(f"---------------\n  ITERATION {i+1}  \n---------------")
+    data_prev_file = f"points_iter{i}.npz" # previous points
+    candidates_file = f"suggested_inputs_iter{i+1}.npy" # save new proposed inputs to evaluate
+    ckpt_file = f"learner_{model_type}_iter{i+1}.ckpt" # save model for this iteration
+
+    # Train model on previous points, then propose new points using Expected Improvement
+    model = model_class(data_file=data_prev_file,bounds=bounds,
+    config_settings=cs,multi_fidelity=True)
+    model.learn(outfile=ckpt_file)
+    model.optimize(outfile=candidates_file, learner_file=ckpt_file, 
+    acq_method="KG",fidelity_cost=[1,6])
+
+    # Load previous input & output values
+    data_prev = np.load(data_prev_file)
+    X_prev = data_prev["X"]
+    y_prev = data_prev["y"]
+
+    X_new = np.load(candidates_file) # Load proposed inputs
+    y_new = objective(X_new) # Evaluate proposed inputs
+
+    # Concatenate new input & output values with previous and save
+    X = np.concatenate([X_prev,X_new],axis=0)
+    y = np.concatenate([y_prev,y_new],axis=0)
+    np.savez(f"points_iter{i+1}.npz",X=X,y=y)
+```
+
+Just as before, we have `n_iterations` npy files of suggested inputs and `n_iterations + 1` npz files of points. To visualize, we just need to distinguish between low and high fidelity candidates and make sure the running max is only over high fidelity candidates:
+
+```py title='plot_optimization_mf.py' linenums="1"
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Make sure these match the iterative_optimization.py file
+num_initial_points = 10
+num_iterations = 20
+
+pts = np.load(f'points_iter{num_iterations}.npz') # Load last collection of points
+y = pts['y'] # Extract objective values
+fids = pts['X'][:,-1] # Extract fidelity values
+pts_per_iteration = (len(y)-num_initial_points)//num_iterations # Work out how many points were proposed per iteration
+iters = np.concatenate([np.zeros(num_initial_points),np.repeat(
+    np.arange(1,num_iterations+1),pts_per_iteration)]) # Set the iteration value of all points
+plt.scatter(iters[fids==0],y[fids==0],'tab:blue') # Plot low fidelity points in blue
+plt.scatter(iters[fids==1],y[fids==1],'tab:orange') # Plot high fidelity points in orange
+plt.xlabel('Iterations')
+plt.xticks(np.arange(num_iterations+1))
+plt.ylabel('Objective value')
+
+#Find running max:
+max_byiter = np.zeros(num_iterations+1) # This will store max for each iteration
+max_byiter[0] = np.max(y[:num_initial_points]) # Max of initial points
+for i in range(1,num_iterations+1):
+    max_byiter[i] = np.max(y[num_initial_points+(
+        i-1)*pts_per_iteration:num_initial_points+i*pts_per_iteration]) # Max of each iteration (when multiple proposals)
+plt.plot(np.arange(num_iterations+1),np.maximum.accumulate(
+    max_byiter),label='running max') # Add running max to plot
+plt.legend()
+plt.show()
 ```
 
 ## Tutorial: Acquisition functions
