@@ -373,23 +373,28 @@ fids = pts['X'][:,-1] # Extract fidelity values
 pts_per_iteration = (len(y)-num_initial_points)//num_iterations # Work out how many points were proposed per iteration
 iters = np.concatenate([np.zeros(num_initial_points),np.repeat(
     np.arange(1,num_iterations+1),pts_per_iteration)]) # Set the iteration value of all points
-plt.scatter(iters[fids==0],y[fids==0],'tab:blue') # Plot low fidelity points in blue
-plt.scatter(iters[fids==1],y[fids==1],'tab:orange') # Plot high fidelity points in orange
+plt.scatter(iters[fids==0],y[fids==0],'tab:blue',label='low fidelity') # Plot low fidelity points in blue
+plt.scatter(iters[fids==1],y[fids==1],'tab:orange',label='high fidelity') # Plot high fidelity points in orange
 plt.xlabel('Iterations')
 plt.xticks(np.arange(num_iterations+1))
 plt.ylabel('Objective value')
 
 #Find running max:
 max_byiter = np.zeros(num_iterations+1) # This will store max for each iteration
-max_byiter[0] = np.max(y[:num_initial_points]) # Max of initial points
+iters_high = iters[fids==1] # Iterations for high fidelity candidates
+y_high = y[fids==1] # High fidelity candidates
+max_byiter[0] = np.max(y_high[iters_high==0]) # Max of initial points
 for i in range(1,num_iterations+1):
-    max_byiter[i] = np.max(y[num_initial_points+(
-        i-1)*pts_per_iteration:num_initial_points+i*pts_per_iteration]) # Max of each iteration (when multiple proposals)
+    max_byiter[i] = np.max(y_high[iters_high==i]) if i in iters_high else max_byiter[i-1] # Max of high fidelity candidates for each iteration (when none, keep previoius running max)
 plt.plot(np.arange(num_iterations+1),np.maximum.accumulate(
-    max_byiter),label='running max') # Add running max to plot
+    max_byiter),color='tab:orange',label='running max') # Add running max to plot
 plt.legend()
 plt.show()
 ```
+
+The generated figure should look like this: ![Multi-fidelit optimization of two inverted paraboloids using Knowledge Gradient](../imgs/mf_optimization_plot.png)
+
+The plot shows a running max in orange that converges to the objective maximum (-1 in this example), while individual proposals are a mix of low and high fidelity candidates. Note that the low fidelity maximum here is higher than the high fidelity one, but we are only interested in finding the latter.
 
 ## Tutorial: Risk-averse optimization
 To do risk-averse optimization, simply specify the risk_measure (CLI: --risk-measure), risk_level (CLI: --risk-level), risk_n_deltas (CLI: --risk_n_deltas), and x_stddev (CLI: --X-stddev) when calling optimize. The available risk measures are VaR (variance at risk) and CVaR (conditional variance at resk). The risk level is between 0 and 1 and sets the corresponding alpha value (see the BoTorch [example](https://botorch.org/tutorials/risk_averse_bo_with_environmental_variables) for more details). risk_n_deltas sets the number of samples to draw for input perturbations (more accuracy and longer run time for larger values). x_stddev sets the size of the input perturbations in each dimension (can provide a list to specify dimension-by-dimension or a scalar to set the same pertrubation for all inputs). Currently only EI, NEI, and KG acquisition functions support risk measures.
