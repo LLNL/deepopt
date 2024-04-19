@@ -6,7 +6,7 @@ In this page we'll present several tutorials on how to use different parts of th
 One of the powerful features of deepopt is the ability to use neural network surrogates in place of Gaussian process surrogates during optimization. In this tutorial, we'll repeat the [Getting Started](./index.md#getting-started-with-deepopt) example, but using neural networks in place of Gaussian process. One key difference is the need for a neural network configuration file that specifies the network architecture, activation functions, and a few other parameters. We'll describe these in detail as we move along.
 
 ### Create the initial data
-Just as in [Getting Started](./index.md#getting-started-with-deepopt), we'll put some initial data in a 'sims.npz' file
+Just as in [Getting Started](./index.md#getting-started-with-deepopt), we'll put some initial data in a `sims.npz` file
 
 ```py title="generate_simulation_inputs.py" linenums="1"
 import torch
@@ -18,9 +18,10 @@ num_points = 10
 X = torch.rand(num_points, input_dim)
 y = -(X**2).sum(axis=1)
 
-np.savez('sims.npz', X=X, y=y) # (1)
+np.savez('sims.npz', X=X, y=y) #(1)
 ```
-1. Save data to file 'sims.npz'
+
+1. Save data to file `sims.npz`
 
 We can now generate the `sims.npz` file with:
 
@@ -41,11 +42,11 @@ from deepopt.configuration import ConfigSettings
 from deepopt.deepopt_cli import get_deepopt_model
 
 input_dim = 5 #(1)
-model_type = 'delUQ' # (2)
-model_class = get_deepopt_model(model_type=model_type) # (3)
+model_type = 'delUQ' #(2)
+model_class = get_deepopt_model(model_type=model_type) #(3)
 cs = ConfigSettings(model_type=model_type) #(4)
-bounds = torch.FloatTensor(input_dim*[[0,1]]).T  # (5)
-model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  # (6)
+bounds = torch.FloatTensor(input_dim*[[0,1]]).T  #(5)
+model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  #(6)
 ```
 
 1. Input dimension must match data file (`sims.npz` in this case)
@@ -59,7 +60,7 @@ Training and optimizing are done as in [Getting Started](./index.md#getting-star
 
 === "DeepOpt API"
     ```py title="run_deepopt.py" linenums="11"
-    model.learn(outfile=f'learner_{model_type}.ckpt') # (1)
+    model.learn(outfile=f'learner_{model_type}.ckpt') #(1)
     ```
 
     1. Train the neural network and save its state to a checkpoint file.
@@ -69,9 +70,10 @@ Training and optimizing are done as in [Getting Started](./index.md#getting-star
     input_dim = 5
     bounds = ""
     for i in {1..input_dim-1}; do bounds+="[0,1],"; done
-    bounds+="[0,1]"
+    bounds+="[0,1]" #(1)
     deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds
     ```
+    1. Together with the previous 2 lines, this defines the appropriate `bounds` variable to match `input_dim`.
 
 The checkpoint files saved by DeepOpt use `torch.save` under the hood. They are python dictionaries and can be viewed using `torch.load`:
 ```py title="view_ckpt.py" linenums="1"
@@ -80,11 +82,12 @@ model_type = 'delUQ'
 ckpt = torch.load(f'learner_{model_type}.ckpt')
 print(ckpt.keys())
 ```
-The delUQ model has 4 entries in the checkpoint dictionary: 
--`epoch`: is the number of epochs the NN was trained for 
--`state_dict`: is a dictionary containing all of the values of the NN weights, biases, and other layer parameters 
--`B`: is the initial transformation to frequency space when using Fourier features 
--`opt_state_dict`: contains the optimizer parameters.
+The delUQ model has 4 entries in the checkpoint dictionary:
+
+- `epoch`: is the number of epochs the NN was trained for 
+- `state_dict`: is a dictionary containing all of the values of the NN weights, biases, and other layer parameters 
+- `B`: is the initial transformation to frequency space when using Fourier features 
+- `opt_state_dict`: contains the optimizer parameters.
 
 Now that we saved the trained model, we can use it to propose new candidate points:
 
@@ -92,10 +95,10 @@ Now that we saved the trained model, we can use it to propose new candidate poin
     ```py title="run_deepopt.py" linenums="12"
     model.optimize(outfile='suggested_inputs.npy',
                    learner_file=f'learner_{model_type}.ckpt',
-                   acq_method='EI') # (1)
+                   acq_method='EI') #(1)
     ```
 
-    1. Use Expected Improvement to acquire new points based on the model saved in learner_file and save those points as a numpy array in outfile.
+    1. Use [Expected Improvement](./acquisition_functions.md#ei) to acquire new points based on the model saved in `learner_file` and save those points as a `numpy` array in `outfile`.
 
 === "DeepOpt CLI"
     ```bash
@@ -103,7 +106,13 @@ Now that we saved the trained model, we can use it to propose new candidate poin
     -m delUQ -b $bounds -a EI
     ```
 
-The saved file `suggested_inputs.npy` is a `numpy` save file containing the array of new points with dimension Nxd (N= # of new points, d = input dimensions). We can view the file using `numpy.load`:
+If you're using the DeepOpt API, we can now run our script with:
+
+```bash
+python run_deepopt.py
+```
+
+The saved file `suggested_inputs.npy` is a `numpy` save file containing the array of new points with dimension `N X d` (`N`: # of new points, `d`: # of input dimensions). We can view the file using `numpy.load`:
 ```bash
 python -c "import numpy as np; print(np.load('suggested_inputs.npy'))"
 ```
@@ -114,31 +123,31 @@ Simply create a configuration yaml file with the desired entries (available sett
 === "DeepOpt API"
     ```py title="run_deepopt.py" linenums="11"
     model.learn(outfile=f'learner_{model_type}.ckpt',
-    config_file='config.yaml') # (1)
+    config_file='config.yaml') #(1)
 
     model.optimize(outfile='suggested_inputs.npy',
                    learner_file=f'learner_{model_type}.ckpt',
                    config_file=config.yaml,
-                   acq_method='EI') # (2)    
+                   acq_method='EI') #(2)    
     ```
 
     1. Train the neural network and save its state to a checkpoint file.
-    2. Use Expected Improvement to acquire new points based on the model saved in learner_file and save those points as a numpy array in outfile.
+    2. Use [Expected Improvement](./acquisition_functions.md#ei) to acquire new points based on the model saved in `learner_file` and save those points as a `numpy` array in `outfile`.
 
 === "DeepOpt CLI"
     ```bash
     input_dim = 5
     bounds = ""
     for i in {1..input_dim-1}; do bounds+="[0,1],"; done
-    bounds+="[0,1]"
-    deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds -c config.yaml # (1)
+    bounds+="[0,1]" #(1)
+    deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds -c config.yaml #(2)
 
     deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt \
-    -m delUQ -b $bounds -a EI -c config.yaml # (2)
+    -m delUQ -b $bounds -a EI -c config.yaml #(3)
     ```
-
-    1. Train the neural network and save its state to a checkpoint file.
-    2. Use Expected Improvement to acquire new points based on the model saved in learner_delUQ.ckpt and save those points as a numpy array in suggested_inputs.npy.
+    1. Together with the 2 previous lines, this defines the appropriate `bounds` variable to match `input_dim`.
+    2. Train the neural network and save its state to a checkpoint file.
+    3. Use [Expected Improvement](./acquisition_functions.md#ei) to acquire new points based on the model saved in `learner_delUQ.ckpt` and save those points as a `numpy` array in `suggested_inputs.npy`.
 
 
 ## Tutorial: Iterative optimization
@@ -248,7 +257,7 @@ num_points = 10
 
 X = torch.rand(num_points, input_dim)
 X[:,-1] = X[:,-1].round()
-y = -(X**2).sum(axis=1) # (1)
+y = -(X**2).sum(axis=1) #(1)
 
 np.savez('sims.npz', X=X, y=y)
 ```
@@ -264,40 +273,39 @@ Additionally, to achieve multi-fidelity optimization with DeepOpt you must:
 
 1. Enable multi-fidelity in your model
 2. Pass a list of fidelity costs to the optimize method (the length of the list must match the number of fidelities)
-3.  Select an acquisition function that's appropriate for multi-fidelity optimization (currently only Knowledge Gradient and Max Value Entropy are supported)
+3.  Select an [acquisition function](./acquisition_functions.md) that's appropriate for multi-fidelity optimization (currently only [Knowledge Gradient](./acquisition_functions.md#kg) and [Max Value Entropy](./acquisition_functions.md#maxvalentropy) are supported)
 
-Below, we show how to modify the optimize call from `run_deepopt.py` to accommodate these changes, and also how to achieve this same functionality from the command line:
+Below, we show how to modify the `optimize` call from `run_deepopt.py` to accommodate these changes, and also how to achieve this same functionality from the command line:
 
 === "DeepOpt API"
-    ```py title="run_deepopt_mf.py" linenums="1" hl_lines="11-16"
+    ```py title="run_deepopt_mf.py" linenums="1" hl_lines="10-15"
     import torch
     from deepopt.configuration import ConfigSettings
     from deepopt.deepopt_cli import get_deepopt_model
 
     input_dim = 5
-    model_type = "GP" 
-    bounds = torch.FloatTensor(input_dim*[[0,1]]).T 
-
-    deepopt_model = get_deepopt_model(model_type)
+    model_type = "GP"
+    model_class = get_deepopt_model(model_type)
     cs = ConfigSettings(model_type=model_type)
-    model = deepopt_model(data_file="sims.npz", bounds=bounds, 
+    bounds = torch.FloatTensor(input_dim*[[0,1]]).T 
+    model = model_class(data_file="sims.npz", bounds=bounds, 
     config_settings=cs, multi_fidelity=True)
     model.learn(outfile=f"learner_{model_type}.ckpt")
     model.optimize(outfile="suggested_inputs.npy",
                 learner_file=f"learner_{model_type}.ckpt",
-                acq_method="KG",fidelity_cost=[1,6]) # (1)
+                acq_method="KG",fidelity_cost=[1,6]) #(1)
     ```
 
-    1. We use the Knowledge Gradient (KG) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
+    1. We use the [Knowledge Gradient (KG)](./acquisition_functions.md#kg) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
 
 === "DeepOpt CLI"
     ```bash
     deepopt optimize -i sims.npz -l learner_GP.ckpt -o suggested_inputs.npy \
     -b "[[0, 1], [0, 1], [0, 1], [0, 1], [0, 1]]" \
-    -a KG --multi-fidelity --fidelity-cost "[1,6]" # (1)
+    -a KG --multi-fidelity --fidelity-cost "[1,6]" #(1)
     ```
 
-    1. We use the Knowledge Gradient (KG) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
+    1. We use the [Knowledge Gradient (KG)](./acquisition_functions.md#kg) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
 
 The API script can be run with
 ```bash
@@ -392,9 +400,19 @@ plt.legend()
 plt.show()
 ```
 
-The generated figure should look like this: ![Multi-fidelit optimization of two inverted paraboloids using Knowledge Gradient](../imgs/mf_optimization_plot.png)
+The generated figure should look like this: ![Multi-fidelity optimization of two inverted paraboloids using Knowledge Gradient](../imgs/mf_optimization_plot.png)
 
 The plot shows a running max in orange that converges to the objective maximum (-1 in this example), while individual proposals are a mix of low and high fidelity candidates. Note that the low fidelity maximum here is higher than the high fidelity one, but we are only interested in finding the latter.
 
 ## Tutorial: Risk-averse optimization
-To do risk-averse optimization, simply specify the risk_measure (CLI: --risk-measure), risk_level (CLI: --risk-level), risk_n_deltas (CLI: --risk_n_deltas), and x_stddev (CLI: --X-stddev) when calling optimize. The available risk measures are VaR (variance at risk) and CVaR (conditional variance at resk). The risk level is between 0 and 1 and sets the corresponding alpha value (see the BoTorch [example](https://botorch.org/tutorials/risk_averse_bo_with_environmental_variables) for more details). risk_n_deltas sets the number of samples to draw for input perturbations (more accuracy and longer run time for larger values). x_stddev sets the size of the input perturbations in each dimension (can provide a list to specify dimension-by-dimension or a scalar to set the same pertrubation for all inputs). Currently only EI, NEI, and KG acquisition functions support risk measures.
+!!! note
+
+    Currently only [EI](./acquisition_functions.md#ei), [NEI](./acquisition_functions.md#nei), and [KG](./acquisition_functions.md#kg) [acquisition functions](./acquisition_functions.md) support risk measures.
+
+To do risk-averse optimization, simply specify the `risk_measure` (CLI: `--risk-measure`), `risk_level` (CLI: `--risk-level`), `risk_n_deltas` (CLI: `--risk_n_deltas`), and `x_stddev` (CLI: `--X-stddev`) when calling `optimize`.
+
+The available risk measures are VaR (variance at risk) and CVaR (conditional variance at resk). The risk level is between 0 and 1 and sets the corresponding alpha value (see the BoTorch [example](https://botorch.org/tutorials/risk_averse_bo_with_environmental_variables) for more details). 
+
+`risk_n_deltas` sets the number of samples to draw for input perturbations (more accuracy and longer run time for larger values). 
+
+`x_stddev` sets the size of the input perturbations in each dimension (can provide a list to specify dimension-by-dimension or a scalar to set the same pertrubation for all inputs).
