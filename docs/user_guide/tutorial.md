@@ -3,10 +3,10 @@ In this page we'll present several tutorials on how to use different parts of th
 
 ## Tutorial: Using neural network surrogates
 
-One of the powerful features of deepopt is the ability to use neural network surrogates in place of Gaussian process surrogates during optimization. In this tutorial, we'll repeat the [Getting Started](./index.md#getting-started-with-deepopt) example, but using neural networks in place of Gaussian process. One key difference is the need for a neural network configuration file that specifies the network architecture, activation functions, and a few other parameters. We'll describe these in detail as we move along.
+One of the powerful features of DeepOpt is the ability to use neural network surrogates in place of Gaussian process surrogates during optimization. In this tutorial, we'll repeat the [Getting Started](../index.md#getting-started-with-deepopt) example, but using neural networks in place of Gaussian process. One key difference is the need for a neural network configuration file that specifies the network architecture, activation functions, and a few other parameters. We'll describe these in detail as we move along.
 
 ### Create the initial data
-Just as in [Getting Started](./index.md#getting-started-with-deepopt), we'll put some initial data in a `sims.npz` file
+Just as in [Getting Started](../index.md#getting-started-with-deepopt), we'll put some initial data in a `sims.npz` file
 
 ```py title="generate_simulation_inputs.py" linenums="1"
 import torch
@@ -56,7 +56,7 @@ model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  #(
 5. Learning and optimizing will take place within these input bounds
 6. Model is loaded the same way as with GP, but now we are using `DelUQModel`
 
-Training and optimizing are done as in [Getting Started](./index.md#getting-started-with-deepopt), with the array of new points being recorded in 'suggested_inputs.npy':
+Training and optimizing are done as in [Getting Started](../index.md#getting-started-with-deepopt), with the array of new points being recorded in 'suggested_inputs.npy':
 
 === "DeepOpt API"
     ```py title="run_deepopt.py" linenums="11"
@@ -73,6 +73,7 @@ Training and optimizing are done as in [Getting Started](./index.md#getting-star
     bounds+="[0,1]" #(1)
     deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds
     ```
+
     1. Together with the previous 2 lines, this defines the appropriate `bounds` variable to match `input_dim`.
 
 The checkpoint files saved by DeepOpt use `torch.save` under the hood. They are python dictionaries and can be viewed using `torch.load`:
@@ -123,11 +124,11 @@ Simply create a configuration yaml file with the desired entries (available sett
 === "DeepOpt API"
     ```py title="run_deepopt.py" linenums="11"
     model.learn(outfile=f'learner_{model_type}.ckpt',
-    config_file='config.yaml') #(1)
+                config_file='config.yaml') #(1)
 
     model.optimize(outfile='suggested_inputs.npy',
                    learner_file=f'learner_{model_type}.ckpt',
-                   config_file=config.yaml,
+                   config_file='config.yaml',
                    acq_method='EI') #(2)    
     ```
 
@@ -145,6 +146,7 @@ Simply create a configuration yaml file with the desired entries (available sett
     deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt \
     -m delUQ -b $bounds -a EI -c config.yaml #(3)
     ```
+
     1. Together with the 2 previous lines, this defines the appropriate `bounds` variable to match `input_dim`.
     2. Train the neural network and save its state to a checkpoint file.
     3. Use [Expected Improvement](./acquisition_functions.md#ei) to acquire new points based on the model saved in `learner_delUQ.ckpt` and save those points as a `numpy` array in `suggested_inputs.npy`.
@@ -232,14 +234,15 @@ for i in range(1,num_iterations+1):
 plt.plot(np.arange(num_iterations+1),np.maximum.accumulate(
     max_byiter),label='running max') # Add running max to plot
 plt.legend()
+plt.savefig('optimization_plot.png')
 plt.show()
 ```
 The generated figure should look like this: ![Optimization of an inverted paraboloid using Expected Improvement](../imgs/optimization_plot.png)
 
-The plot shows a running max that converges to the objective maximum (0 in this example), while individual proposals are a mix of high values (at or near the running max) from succesfuly exploitation/exploration and low values (far below the running max) from unsuccesful exploration.
+The plot shows a running max that converges to the objective maximum (0 in this example), while individual proposals are a mix of high values (at or near the running max) from succesful exploitation/exploration and low values (far below the running max) from unsuccesful exploration.
 
 ## Tutorial: Multi-fidelity optimization
-In this tutorial, we'll walk through how to accomplish multi-fidelity optimization with DeepOpt. We'll start by copying the `generate_simulation_inputs.py` and `run_deepopt.py` file from the [Getting Started page](./index.md#getting-started-with-deepopt):
+In this tutorial, we'll walk through how to accomplish multi-fidelity optimization with DeepOpt. We'll start by copying the `generate_simulation_inputs.py` and `run_deepopt.py` file from the [Getting Started page](../index.md#getting-started-with-deepopt):
 
 ```bash
 cp generate_simulation_inputs.py generate_simulation_inputs_mf.py
@@ -289,11 +292,11 @@ Below, we show how to modify the `optimize` call from `run_deepopt.py` to accomm
     cs = ConfigSettings(model_type=model_type)
     bounds = torch.FloatTensor(input_dim*[[0,1]]).T 
     model = model_class(data_file="sims.npz", bounds=bounds, 
-    config_settings=cs, multi_fidelity=True)
+                        config_settings=cs, multi_fidelity=True)
     model.learn(outfile=f"learner_{model_type}.ckpt")
     model.optimize(outfile="suggested_inputs.npy",
-                learner_file=f"learner_{model_type}.ckpt",
-                acq_method="KG",fidelity_cost=[1,6]) #(1)
+                   learner_file=f"learner_{model_type}.ckpt",
+                   acq_method="KG",fidelity_cost=[1,6]) #(1)
     ```
 
     1. We use the [Knowledge Gradient (KG)](./acquisition_functions.md#kg) multi-fidelity acquisition function with a 1:6 ratio of low:high fidelity costs.
@@ -346,10 +349,10 @@ for i in range(n_iterations):
 
     # Train model on previous points, then propose new points using Expected Improvement
     model = model_class(data_file=data_prev_file,bounds=bounds,
-    config_settings=cs,multi_fidelity=True)
+                        config_settings=cs,multi_fidelity=True)
     model.learn(outfile=ckpt_file)
     model.optimize(outfile=candidates_file, learner_file=ckpt_file, 
-    acq_method="KG",fidelity_cost=[1,6])
+                   acq_method="KG",fidelity_cost=[1,6])
 
     # Load previous input & output values
     data_prev = np.load(data_prev_file)
@@ -397,6 +400,7 @@ for i in range(1,num_iterations+1):
 plt.plot(np.arange(num_iterations+1),np.maximum.accumulate(
     max_byiter),color='tab:orange',label='running max') # Add running max to plot
 plt.legend()
+plt.savefig('mf_optimization_plot.png')
 plt.show()
 ```
 

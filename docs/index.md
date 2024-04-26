@@ -90,6 +90,7 @@ Next, we'll train a GP surrogate on the data and save the model that's created t
     bounds+="[0,1]" #(1)
     deepopt learn -i sims.npz -o learner_GP.ckpt -b $bounds
     ```
+    1. Together with the previous 2 lines, this defines the appropriate `bounds` variable to match `input_dim`.
 
 The checkpoint files saved by DeepOpt use `torch.save` under the hood. They are python dictionaries and can be viewed using `torch.load`:
 ```py title="view_ckpt.py" linenums="1"
@@ -104,8 +105,8 @@ Now that we have a model that's trained, we'll use this model to propose new poi
 === "DeepOpt API"
     ```py title="run_deepopt.py" linenums="12"
     model.optimize(outfile="suggested_inputs.npy", 
-    learner_file=f"learner_{model_type}.ckpt", 
-    acq_method="EI") #(1)
+                   learner_file=f"learner_{model_type}.ckpt", 
+                   acq_method="EI") #(1)
     ```
 
     1. Use Expected Improvement to acquire new points based on the model saved in `learner_file` and save those points as a `numpy` array in `outfile`.
