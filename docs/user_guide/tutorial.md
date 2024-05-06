@@ -316,7 +316,7 @@ python run_deepopt_mf.py
 ```
 
 We can make an iterative optimization workflow similar to the single-fidelity case above:
-```py title='iterative_optimization_mf.py' linenums="1"
+```py title='iterative_optimization_mf.py' linenums="1" hl_lines="13 31-36"
 import torch
 import numpy as np
 from deepopt.configuration import ConfigSettings
@@ -370,7 +370,7 @@ for i in range(n_iterations):
 
 Just as before, we have `n_iterations` npy files of suggested inputs and `n_iterations + 1` npz files of points. To visualize, we just need to distinguish between low and high fidelity candidates and make sure the running max is only over high fidelity candidates:
 
-```py title='plot_optimization_mf.py' linenums="1"
+```py title='plot_optimization_mf.py' linenums="1" hl_lines="10 14-15 22-28"
 import numpy as np
 import matplotlib.pyplot as plt
 
