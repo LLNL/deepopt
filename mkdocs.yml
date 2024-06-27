@@ -7,6 +7,7 @@ nav:
     - Installation: "user_guide/installation.md"
     - Tutorial: "user_guide/tutorial.md"
     - Configuration: "user_guide/configuration.md"
+    - Acquisition Functions: "user_guide/acquisition_functions.md"
   - Reference Guide:
     - DeepOpt Reference: "api_reference/index.md"
     - API Reference: "api_reference/"

@@ -20,6 +20,7 @@ from botorch import fit_gpytorch_model
 from botorch.acquisition import PosteriorMean, qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.acquisition.cost_aware import InverseCostWeightedUtility
 from botorch.acquisition.fixed_feature import FixedFeatureAcquisitionFunction
+from botorch.acquisition.utils import project_to_target_fidelity
 from botorch.acquisition.knowledge_gradient import qKnowledgeGradient, qMultiFidelityKnowledgeGradient
 from botorch.acquisition.objective import ExpectationPosteriorTransform
 from botorch.acquisition.risk_measures import CVaR, RiskMeasureMCObjective, VaR
@@ -195,6 +196,9 @@ class DeepoptBaseModel(ABC):
             """
         )
         self.train(outfile=outfile)
+        
+    def _project(self, X):
+        return project_to_target_fidelity(X=X, target_fidelities=self.target_fidelities)
 
     def get_risk_measure_objective(self, risk_measure: str, **kwargs) -> Type[RiskMeasureMCObjective]:
         """
@@ -464,7 +468,9 @@ class DeepoptBaseModel(ABC):
             and an associated acquisition value.
         """
 
-        print(f"Number of simulations: {len(self.full_train_X)}. Current max: {self.full_train_Y.max().item():.5f}")
+        current_max = self.full_train_Y[self.full_train_X[:,-1]==(self.num_fidelities-1)].max(
+            ) if self.multi_fidelity else self.full_train_Y.max()
+        print(f"Number of simulations: {len(self.full_train_X)}. Current max: {current_max.item():.5f}")
 
         if self.multi_fidelity:
             candidates, acq_value = self._get_candidates_mf(
