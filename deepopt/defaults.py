@@ -16,7 +16,7 @@ DELUQ_CONFIG = {
     "activation_first": True,
     "opt_type": "Adam",
     "learning_rate": 0.001,
-    "weight_decay": False,
+    "weight_decay": 0,
     "n_epochs": 1000,
     "batch_size": 1000,
     "variance": 0.001,

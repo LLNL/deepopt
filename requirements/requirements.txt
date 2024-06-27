@@ -12,3 +12,4 @@ scipy
 click>=8.1.0
 pyyaml
 psutil
+matplotlib
