@@ -11,6 +11,8 @@ nav:
   - Reference Guide:
     - DeepOpt Reference: "api_reference/index.md"
     - API Reference: "api_reference/"
+  - Contributing: "contributing.md"
+  - Contact Us: "contact.md"
 
 theme:
   name: material
@@ -58,6 +60,7 @@ markdown_extensions:
 
 plugins:
   - search
+  - glightbox
   - gen-files:
       scripts:
       - docs/gen_ref_pages.py
@@ -76,7 +79,7 @@ extra:
     #   link: https://lc.llnl.gov/gitlab/kur1/deepopt_release
     #   name: DeepOpt on GitHub
     - icon: fontawesome/brands/gitlab
-      link: https://lc.llnl.gov/gitlab/kur1/deepopt_release
+      link: https://lc.llnl.gov/gitlab/deepopt-devs/deepopt
       name: DeepOpt on GitLab
 
 extra_css:
