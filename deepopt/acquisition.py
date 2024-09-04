@@ -58,6 +58,9 @@ from scipy.optimize import brentq
 from scipy.stats import norm
 from torch import Tensor
 
+import perfflowaspect
+import perfflowaspect.aspect
+
 CLAMP_LB = 1.0e-8
 
 
@@ -73,6 +76,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
     :meta private:
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(
         self,
         model: Model,
@@ -112,6 +116,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
         self.weight = 1.0 if maximize else -1.0
         self.set_X_pending(X_pending)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def forward(self, X: Tensor) -> Tensor:
         """
         Helper method to re-shape the tensor when requesting multiple candidate points prior to calculating
@@ -128,6 +133,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
             return self.q_forward(X)
         return self.q_forward(X.unsqueeze(-2))
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     @t_batch_mode_transform(expected_q=1)
     def q_forward(self, X: Tensor) -> Tensor:
         r"""Compute max-value entropy at the design points `X`.
@@ -149,6 +155,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
         ig = self._compute_information_gain(X=X, mean_M=mean, variance_M=variance, covar_mM=variance.unsqueeze(-1))
         return ig.mean(dim=0)  # average over fantasies
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def set_X_pending(self, X_pending: Optional[Tensor] = None) -> None:
         r"""Set pending design points.
 
@@ -165,6 +172,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
 
     # ------- Abstract methods that need to be implemented by subclasses ------- #
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     @abstractmethod
     def _compute_information_gain(self, X: Tensor, **kwargs: Any) -> Tensor:
         r"""Compute the information gain at the design points `X`.
@@ -180,6 +188,7 @@ class MaxValueBase(AcquisitionFunction, ABC):
         """
         pass  # pragma: no cover
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     @abstractmethod
     def _sample_max_values(self, num_samples: int, X_pending: Optional[Tensor] = None) -> Tensor:
         r"""Draw samples from the posterior over maximum values.
@@ -205,6 +214,7 @@ class DiscreteMaxValueBase(MaxValueBase):
     either exact (w.r.t. the candidate set) sampling, or using a Gumbel approximation.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(
         self,
         model: Model,
@@ -255,6 +265,7 @@ class DiscreteMaxValueBase(MaxValueBase):
             X_pending=X_pending,
         )
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _sample_max_values(self, num_samples: int, X_pending: Optional[Tensor] = None) -> Tensor:
         r"""Draw samples from the posterior over maximum values on a discrete set.
 
@@ -314,6 +325,7 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
         >>> mes = MES(test_X)
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(
         self,
         model: Model,
@@ -365,6 +377,7 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
         self.num_fantasies = num_fantasies
         self.set_X_pending(X_pending)  # this did not happen in the super constructor
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def set_X_pending(self, X_pending: Optional[Tensor] = None) -> None:
         r"""Set pending points.
 
@@ -387,6 +400,7 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
             self.model = init_model
         super().set_X_pending(X_pending)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _compute_information_gain(self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor) -> Tensor:
         r"""Computes the information gain at the design points `X`.
 
@@ -519,6 +533,7 @@ class qLowerBoundMaxValueEntropy(DiscreteMaxValueBase):
         >>> candidates, _ = optimize_acqf(qGIBBON, bounds, q=5)
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _compute_information_gain(self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor) -> Tensor:
         r"""Compute GIBBON's approximation of information gain at the design points `X`.
 
@@ -652,6 +667,7 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
         >>> mf_mes = MF_MES(test_X)
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(
         self,
         model: Model,
@@ -726,6 +742,7 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
         # so that the max value samples are at the highest fidelity
         self._sample_max_values(self.num_mv_samples)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     @property
     def cost_sampler(self):
         if self._cost_sampler is None:
@@ -740,6 +757,7 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
             self._cost_sampler = deepcopy(self.fantasies_sampler)
         return self._cost_sampler
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def forward(self, X):
         """
         Helper method to re-shape the tensor when requesting multiple candidate points prior to calculating
@@ -757,6 +775,7 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
         else:
             return self.q_forward(X.unsqueeze(-2))
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     @t_batch_mode_transform(expected_q=1)
     def q_forward(self, X: Tensor) -> Tensor:
         r"""Evaluates `qMultifidelityMaxValueEntropy` at the design points `X`
@@ -813,6 +832,7 @@ class qMultiFidelityLowerBoundMaxValueEntropy(qMultiFidelityMaxValueEntropy):
         >>> mf_gibbon = MF_qGIBBON(test_X)
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _compute_information_gain(self, X: Tensor, mean_M: Tensor, variance_M: Tensor, covar_mM: Tensor) -> Tensor:
         r"""Compute GIBBON's approximation of information gain at the design points `X`.
 
@@ -836,7 +856,7 @@ class qMultiFidelityLowerBoundMaxValueEntropy(qMultiFidelityMaxValueEntropy):
             self, X=X, mean_M=mean_M, variance_M=variance_M, covar_mM=covar_mM
         )
 
-
+@perfflowaspect.aspect.critical_path(pointcut="around")
 def _sample_max_value_Thompson(
     model: Model,
     candidate_set: Tensor,
@@ -869,7 +889,7 @@ def _sample_max_value_Thompson(
 
     return max_values
 
-
+@perfflowaspect.aspect.critical_path(pointcut="around")
 def _sample_max_value_Gumbel(
     model: Model,
     candidate_set: Tensor,

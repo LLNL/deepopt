@@ -12,12 +12,15 @@ from torch.optim import SGD, Adam
 
 from deepopt.configuration import ConfigSettings
 
+import perfflowaspect
+import perfflowaspect.aspect
 
 class MLPLayer(nn.Module):
     """
     A class representation for a layer of an MLP neural network.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(self, config: ConfigSettings, input_dim: int, output_dim: int, is_first: bool, is_last: bool):
         """
         Create a layer of the MLP neural network.
@@ -58,6 +61,7 @@ class MLPLayer(nn.Module):
         if self.activation == "siren":
             self.init_weights()
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def init_weights(self):
         """
         Initialize the weights for this layer
@@ -66,6 +70,7 @@ class MLPLayer(nn.Module):
         with torch.no_grad():
             self.linear.weight.uniform_(-b, b)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Performs the forward pass computation for this layer.
@@ -110,6 +115,7 @@ class MLP(nn.Module):
     This uses a nonlinear activation function to train a model.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(
         self,
         config: ConfigSettings,
@@ -176,6 +182,7 @@ class MLP(nn.Module):
 
         self.mlp = nn.Sequential(*layers).to(device)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def input_mapping(self, x: torch.Tensor) -> torch.Tensor:
         """
         Transform the input data into a format that can be processed by the MLP
@@ -191,6 +198,7 @@ class MLP(nn.Module):
         x_proj = (2.0 * np.pi * x).float().to(self.device) @ self.B.t()
         return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Performs the forward pass computation for the MLP neural network
@@ -206,7 +214,7 @@ class MLP(nn.Module):
             out = self.mlp(h)
         return out
 
-
+@perfflowaspect.aspect.critical_path(pointcut="around")
 def create_optimizer(network: Type[nn.Module], config: ConfigSettings) -> Union[Adam, SGD]:
     """
     This function instantiates and returns optimizer objects of the input neural network
@@ -235,14 +243,14 @@ def create_optimizer(network: Type[nn.Module], config: ConfigSettings) -> Union[
 
     return optimizer
 
-
+@perfflowaspect.aspect.critical_path(pointcut="around")
 def proposed_lr(config, epoch, epoch_per_cycle):
     # Cosine Annealing Learning Rate Update
     # https://github.com/moskomule/pytorch.snapshot.ensembles/blob/master/se.py
     iteration = int(epoch % epoch_per_cycle)
     return config["learning_rate"] * (cos(pi * iteration / epoch_per_cycle) + 1) / 2
 
-
+@perfflowaspect.aspect.critical_path(pointcut="around")
 def prepare_cut_mix_batch(config, input, target):
     # Generate Mixed Sample
     # https://github.com/clovaai/CutMix-PyTorch/blob/master/train.py

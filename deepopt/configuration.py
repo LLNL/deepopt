@@ -9,12 +9,15 @@ import yaml
 
 from deepopt.defaults import DELUQ_CONFIG, GP_CONFIG
 
+import perfflowaspect
+import perfflowaspect.aspect
 
 class ConfigSettings:
     """
     Class for loading and storing configuration settings.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(self, model_type: str, config_file: str = None):
         """
         Set up the configurations by loading them from `config_file`.
@@ -35,6 +38,7 @@ class ConfigSettings:
         self.config_settings = {"model_type": self.model_type}
         self.load_config()
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __copy__(self):
         """
         A magic method to allow this class to be copied with copy(instance_of_ConfigSettings).
@@ -44,6 +48,7 @@ class ConfigSettings:
         result.__dict__.update(self.__dict__)
         return result
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __contains__(self, key: str):
         """
         A magic method to allow us to see if certain keys are in our configuration.
@@ -54,6 +59,7 @@ class ConfigSettings:
         """
         return key in self.config_settings
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _verify_config_settings(self):
         """
         Ensure all required configuration values are set. If they're not,
@@ -66,6 +72,7 @@ class ConfigSettings:
             except KeyError:
                 self.config_settings[required_config_key] = default_config_val
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def load_config(self):
         """
         Load in all of the configuration options provided by the user.
@@ -84,6 +91,7 @@ class ConfigSettings:
             self.config_settings.update(config)
         self._verify_config_settings()
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def get_setting(self, setting_name: str) -> Any:
         """
         Return the setting associated with `setting_name`.
@@ -96,6 +104,7 @@ class ConfigSettings:
         except KeyError as exc:
             raise KeyError(f"The setting {setting_name} is not a valid setting.") from exc
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def set_setting(self, setting_name: str, setting_val: Any):
         """
         Set a new configuration setting option.

@@ -46,12 +46,15 @@ from deepopt.deltaenc import DeltaEnc
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
+import perfflowaspect
+import perfflowaspect.aspect
 
 class FidelityCostModel(DeterministicModel):
     """
     The cost model for multi-fidelity runs.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(self, fidelity_weights: np.ndarray):
         """
         Initialize the fidelity cost model with the weights for different fidelities.
@@ -62,6 +65,7 @@ class FidelityCostModel(DeterministicModel):
         self._num_outputs = 1
         self.fidelity_weights = torch.Tensor(fidelity_weights)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
         Compute the fidelity cost based on the provided input tensor.
@@ -124,6 +128,7 @@ class DeepoptBaseModel(ABC):
     target: str = "dy"
     target_fidelities: Dict[int, float] = None
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __post_init__(self) -> None:
         input_data = np.load(self.data_file)
         self.X_orig = torch.from_numpy(input_data["X"]).float()
@@ -150,6 +155,7 @@ class DeepoptBaseModel(ABC):
         np.random.seed(self.random_seed)
         random.seed(self.random_seed)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     @abstractmethod
     def train(self, outfile: str) -> Type[Model]:
         """
@@ -162,6 +168,7 @@ class DeepoptBaseModel(ABC):
         """
         raise NotImplementedError("All DeepOpt models must have a `train` method implemented.")
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     @abstractmethod
     def load_model(self, learner_file: str) -> Type[Model]:
         """
@@ -174,6 +181,7 @@ class DeepoptBaseModel(ABC):
         """
         raise NotImplementedError("All DeepOpt models must have a `load_model` method implemented.")
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def learn(self, outfile: str):
         """
         The method to process the `deepopt learn` command.
@@ -197,9 +205,11 @@ class DeepoptBaseModel(ABC):
         )
         self.train(outfile=outfile)
         
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _project(self, X):
         return project_to_target_fidelity(X=X, target_fidelities=self.target_fidelities)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def get_risk_measure_objective(self, risk_measure: str, **kwargs) -> Type[RiskMeasureMCObjective]:
         """
         Given a risk measure, return the associated BoTorch risk measure object.
@@ -215,6 +225,7 @@ class DeepoptBaseModel(ABC):
             return VaR(**kwargs)
         return None
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _multiv_normal_samples(self, n: int, std_devs: np.ndarray) -> torch.Tensor:
         """
         Create a multivariate normal and draw `n` quasi-Monte Carlo (qMC) samples from the
@@ -232,6 +243,7 @@ class DeepoptBaseModel(ABC):
         samples = engine.draw(n)
         return samples
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def get_input_perturbation(self, risk_n_deltas: int, bounds: np.ndarray, X_stddev: np.ndarray) -> InputPerturbation:
         """
         Get the input perturbation.
@@ -249,6 +261,7 @@ class DeepoptBaseModel(ABC):
         ).eval()
         return input_pertubation
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _get_candidates_mf(
         self,
         model: Type[Model],
@@ -363,6 +376,7 @@ class DeepoptBaseModel(ABC):
         print(f"{acq_value = }")
         return candidates, acq_value
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _get_candidates_sf(
         self,
         model: Type[Model],
@@ -441,6 +455,7 @@ class DeepoptBaseModel(ABC):
         print(f"{acq_value=}")
         return candidates, q_acq
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def get_candidates(
         self,
         model: Type[Model],
@@ -491,6 +506,7 @@ class DeepoptBaseModel(ABC):
             )
         return candidates, acq_value
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def optimize(
         self,
         outfile: str,
@@ -578,6 +594,7 @@ class GPModel(DeepoptBaseModel):
     This class has the same class variables as `DeepoptBaseModel`.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def train(self, outfile: str) -> Union[SingleTaskGP, SingleTaskMultiFidelityGP]:
         """
         Train the GP surrogate and save the model produced.
@@ -611,6 +628,7 @@ class GPModel(DeepoptBaseModel):
         torch.save(state, join(getcwd(), dirname(outfile), basename(outfile)))
         return model
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def load_model(self, learner_file: str) -> Union[SingleTaskGP, SingleTaskMultiFidelityGP]:
         """
         Load in the GP model from the learner file.
@@ -649,6 +667,7 @@ class DelUQModel(DeepoptBaseModel):
     This class has the same class variables as `DeepoptBaseModel`.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _deluq_experiment(self, ray_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Training experiment used by ray tuning.
@@ -718,6 +737,7 @@ class DelUQModel(DeepoptBaseModel):
 
         return {"score": cv_score.item()}
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def train(self, outfile: str) -> Type[Model]:
         """
         Train the delUQ surrogate and save the model produced. We use ray to
@@ -799,6 +819,7 @@ class DelUQModel(DeepoptBaseModel):
         ray.shutdown()
         return model
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def load_model(self, learner_file: str) -> Type[Model]:
         """
         Load in the delUQ model from the learner file.

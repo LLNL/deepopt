@@ -22,6 +22,9 @@ from deepopt.configuration import ConfigSettings
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
+import perfflowaspect
+import perfflowaspect.aspect
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
@@ -32,6 +35,7 @@ class DeltaEnc(Model):
     our prediciton values with uncertainty.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(
         self,
         network: Arch,
@@ -135,6 +139,7 @@ class DeltaEnc(Model):
     # coped from model.py
     # Originally, this method accessed the first dim of self.train_inputs (i.e self.train_inputs[0])
     # because the inputs are assumed to be in batches.
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _set_transformed_inputs(self) -> None:
         r"""Update training inputs with transformed inputs."""
         if hasattr(self, "input_transform") and not self._has_transformed_inputs:
@@ -155,6 +160,7 @@ class DeltaEnc(Model):
 
     # copied from exact_gp.py
     # This needs to be defined if you are passing in an input transformation.
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def set_train_data(
         self,
         inputs: torch.Tensor = None,
@@ -198,6 +204,7 @@ class DeltaEnc(Model):
             self.train_targets = targets
         self.prediction_strategy = None
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def fit(self):
         """
         Train the model. The results of this process will eventually be pulled
@@ -236,6 +243,7 @@ class DeltaEnc(Model):
                     self.f_optimizer.step()
                     avg_loss += f_loss.item() / len(loader)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def save_ckpt(self, path: str, name: str):
         """
         Save a trained model to a checkpoint file
@@ -251,6 +259,7 @@ class DeltaEnc(Model):
         torch.save(state, filename)
         print("Saved Ckpts")
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def load_ckpt(self, path: str, name: str):
         """
         Load in a trained model from a checkpoint file
@@ -262,6 +271,7 @@ class DeltaEnc(Model):
         self.f_predictor.load_state_dict(saved_state["state_dict"])
         self.f_predictor.B = saved_state["B"]
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def _map_delta_model(self, ref: torch.Tensor, query: torch.Tensor) -> torch.Tensor:
         """
         Maps the delta model based on the input reference (ref) and query tensors
@@ -278,6 +288,7 @@ class DeltaEnc(Model):
         pred = self.f_predictor(samps)
         return pred
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def posterior(
         self,
         X: torch.Tensor,
@@ -305,6 +316,7 @@ class DeltaEnc(Model):
             return posterior_transform(GPyTorchPosterior(mvn))
         return GPyTorchPosterior(mvn)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def forward(self, X: torch.Tensor, **kwargs) -> MultivariateNormal:
         """
         Compute the model output at X with uncertainties, then use that to
@@ -353,6 +365,7 @@ class DeltaEnc(Model):
 
             return mvn
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def get_prediction_with_uncertainty(
         self,
         q: torch.Tensor,
@@ -451,6 +464,7 @@ class DeltaEnc(Model):
 
         return mu, var
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def fantasize(
         self,
         X: torch.Tensor,

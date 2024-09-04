@@ -15,7 +15,10 @@ from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
 from deepopt.models import DelUQModel, GPModel
 
+import perfflowaspect
+import perfflowaspect.aspect
 
+@perfflowaspect.aspect.critical_path(pointcut="around")
 def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel]:
     """
     Given the type of model by the user, return the correct model
@@ -41,6 +44,7 @@ class DeepoptCommand(click.Command):
     functionality we created.
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def parse_args(self, ctx: click.Context, args: List[str]) -> List[str]:
         """
         Override Click's default arg parse functionality with one that
@@ -91,6 +95,7 @@ class ConditionalOption(click.Option):
     and therefore cannot be used without said independent option(s).
     """
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def __init__(self, *args, **kwargs):
         """
         Initialize the conditional option by saving which independent option(s)
@@ -102,6 +107,7 @@ class ConditionalOption(click.Option):
         kwargs["help"] = f"[NOTE: This argument is only used if {self.depends_on} is used.] " + kwargs.get("help", "")
         super().__init__(*args, **kwargs)
 
+    @perfflowaspect.aspect.critical_path(pointcut="around")
     def handle_parse_result(self, ctx: click.Context, opts: Mapping[str, Any], args: List[str]) -> Tuple[Any, List[str]]:
         """
         After click parses the result, validate the result and check if our conditions
