@@ -48,3 +48,5 @@ Teams (LC users only): [DeepOpt Teams Page](https://teams.microsoft.com/l/team/1
 
 DeepOpt is released under an MIT license. For more information, please see the [LICENSE](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt/-/blob/develop/LICENSE.md?ref_type=heads)
 and the [NOTICE](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt/-/blob/develop/NOTICE.md?ref_type=heads).
+
+LLNL-CODE-2006544
