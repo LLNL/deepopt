@@ -8,7 +8,7 @@ hide:
 Easily bring Bayesian optimization to your workflows with DeepOpt!
 
 [On GitHub :fontawesome-brands-github:](https://github.com/LLNL/deepopt){ .md-button .md-button--primary }
-<!--[On GitLab :fontawesome-brands-gitlab:](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt){ .md-button .md-button--primary }--!>
+<!--[On GitLab :fontawesome-brands-gitlab:](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt){ .md-button .md-button--primary }-->
 
 ## Why DeepOpt?
 
