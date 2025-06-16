@@ -7,8 +7,8 @@ hide:
 
 Easily bring Bayesian optimization to your workflows with DeepOpt!
 
-<!-- [On GitHub :fontawesome-brands-github:](https://lc.llnl.gov/gitlab/kur1/deepopt_release){ .md-button .md-button--primary } -->
-[On GitLab :fontawesome-brands-gitlab:](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt){ .md-button .md-button--primary }
+[On GitHub :fontawesome-brands-github:](https://github.com/LLNL/deepopt){ .md-button .md-button--primary }
+<!---[On GitLab :fontawesome-brands-gitlab:](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt){ .md-button .md-button--primary }---!>
 
 ## Why DeepOpt?
 
@@ -147,7 +147,7 @@ In addition to the support for NNs, Deepopt was designed with the following goal
 
 ## Release
 
-DeepOpt is released under an MIT license. For more information, please see the [LICENSE](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt/-/blob/develop/LICENSE.md?ref_type=heads)
-and the [NOTICE](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt/-/blob/develop/NOTICE.md?ref_type=heads).
+DeepOpt is released under an MIT license. For more information, please see the [LICENSE](https://github.com/LLNL/deepopt/blob/develop/LICENSE.md)
+and the [NOTICE](https://github.com/LLNL/deepopt/blob/develop/NOTICE.md).
 
-``LLNL-CODE-XXXXXX``
+``LLNL-CODE-2006544``
