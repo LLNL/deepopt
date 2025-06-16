@@ -147,7 +147,7 @@ In addition to the support for NNs, Deepopt was designed with the following goal
 
 ## Release
 
-DeepOpt is released under an MIT license. For more information, please see the [LICENSE](https://github.com/LLNL/deepopt/blob/develop/LICENSE.md)
-and the [NOTICE](https://github.com/LLNL/deepopt/blob/develop/NOTICE.md).
+DeepOpt is released under an MIT license. For more information, please see the [LICENSE](../LICENSE.md)
+and the [NOTICE](../NOTICE.md).
 
 ``LLNL-CODE-2006544``

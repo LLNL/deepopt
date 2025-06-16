@@ -5,12 +5,12 @@ The documentation for the DeepOpt library uses [MkDocs](https://www.mkdocs.org/)
 ## Prerequisites
 
 Before you run the docs:
-1. Ensure you're at the top-level `deepopt_release/` directory
+1. Ensure you're at the top-level `deepopt/` directory
 2. Install the necessary libraries for the documentation by running `pip install -r docs/requirements.txt`.
 
 ## How to Run
 
-To get a live view of your docs that updates on each save, run `mkdocs serve` from the `deepopt_release/` directory. Once `mkdocs serve` has been run, you can view the docs by pressing `ctrl+click` on the url provided by MkDocs (this url will likely look something like https://127.0.0.1:800x).
+To get a live view of your docs that updates on each save, run `mkdocs serve` from the `deepopt/` directory. Once `mkdocs serve` has been run, you can view the docs by pressing `ctrl+click` on the url provided by MkDocs (this url will likely look something like https://127.0.0.1:800x).
 
 ## API Reference Guide
 

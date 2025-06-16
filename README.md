@@ -6,7 +6,7 @@
 
 <!-- This page needs links once the repo is released and docs are published -->
 
-Visit the [DeepOpt documentation]() for more information on DeepOpt that's not covered in this README.
+Visit the [DeepOpt documentation](./docs/README.md) for more information on DeepOpt that's not covered in this README.
 
 ## What is DeepOpt?
 
@@ -32,11 +32,11 @@ DeepOpt is available via [PyPI](https://pypi.org/) and can be easily installed w
 pip install deepopt
 ```
 
-For a quick start guide, see [Getting Started with DeepOpt]().
+For a quick start guide, see [Getting Started with DeepOpt](./docs/index.md#getting-started-with-deepopt).
 
 ## Contributing
 
-See the [Contributing Page]().
+See the [Contributing Page](./docs/contributing.md).
 
 ## Contact Us
 
@@ -46,7 +46,7 @@ Teams (LC users only): [DeepOpt Teams Page](https://teams.microsoft.com/l/team/1
 
 ## License
 
-DeepOpt is released under an MIT license. For more information, please see the [LICENSE](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt/-/blob/develop/LICENSE.md?ref_type=heads)
-and the [NOTICE](https://lc.llnl.gov/gitlab/deepopt-devs/deepopt/-/blob/develop/NOTICE.md?ref_type=heads).
+DeepOpt is released under an MIT license. For more information, please see the [LICENSE](./LICENSE.md)
+and the [NOTICE](./NOTICE.md).
 
 LLNL-CODE-2006544
