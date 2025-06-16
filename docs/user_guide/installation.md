@@ -23,7 +23,7 @@ deepopt -h
 
 !!! note
 
-    Before installing from GitHub, it's recommended that you use a virtual environment. To see instructions on how to set one up see [Setting Up Your Virtual Environment](#setting-up-your-environment).
+Before installing from GitHub, it's recommended that you use a virtual environment. To see instructions on how to set one up see [Setting Up Your Virtual Environment](#setting-up-your-environment).
 
 [//]: <> (TODO: add a link to the GitHub DeepOpt repo once we release it there)
 To install from GitHub, you'll first need to clone the DeepOpt repository:

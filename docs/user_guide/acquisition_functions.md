@@ -1,0 +1,14 @@
+# Acquisition functions
+There are currently four acquisition functions available for single-fidelity optimization: Expected Improvement (EI), Noisy Expected Improvement (NEI), Knowledge Gradient (KG), and Max Value Entropy (MaxValEntropy). The last two (KG & Max Value Entropy) are also available for multi-fidelity optimization. These acquisition functions are built around the associated [BoTorch acquisition functions](https://botorch.org/api/acquisition.html#acquisitionfunction): qExpectedImprovement, qNoisyExpectedImprovement, qKnowledgeGradient, and qMaxValueEntropy. We briefly describe the strengths and weaknesses of each acquisition.
+
+## EI
+This is one of the simplest acquisition functions for Bayesian optimization. It selects points that optimize improvement over the best function value found thus far (weighted by the probability of achieving such improvement). The interpretation is straightforward, but EI tends to favor exploitation over exploration and can get stuck near local optima.
+
+## NEI
+This adapts EI to problems that are noisy (strong fluctuations in the objective function). The major change from EI is that NEI measures improvement over the best surrogate value (rather than objective function value) among points selected thus far. This allows NEI to avoid getting thrown off by noise, since the surrogate will generally be much smoother than the objective function.
+
+## KG
+Knowledge gradient attempts to reduce EI's heavy exploitation by selecting a point such that a subsequent selection would yield the best expected improvement. Effectively it's a one-step look-ahead acquisition function. Specifically, a potential selection is evaluated by "fantasizing" at the location (drawing outputs from the probability distribution at the location and fitting a separate model to each) then, for each fantasy model, identifying how much improvement is obtained when using EI as a subsequent acquisition. Improvements are averaged over the fantasy models to assign a value to each potential selection and a final selection is made based on the best value. The need to fantasize at each potential location makes KG a fairly expensive acquisition function and it can be slow to use, but in addition to getting stuck less than EI, KG can be used for multi-fidelity optimization problems.
+
+## MaxValEntropy
+Max Value Entropy selects points to minimize its uncertainty about the optimal value. This indirect approach allows it to heavily favor exploration before zooming in on promising spots in the input space. Its information-theoretic foundation also easily extends to the multi-fidelity setting (a low-fidelity candidate is selected if it helps minimize uncertainty about the high-fidelity optimum).

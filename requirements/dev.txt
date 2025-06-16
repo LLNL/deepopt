@@ -1,0 +1,6 @@
+pre-commit
+pylint
+black
+isort
+flake8
+pytest

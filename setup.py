@@ -1,25 +1,26 @@
-import re
 import os
+import re
+
 from setuptools import find_packages, setup
 
 
-def _strip_comments(l):
-    return l.split('#', 1)[0].strip()
+def _strip_comments(line):
+    return line.split("#", 1)[0].strip()
 
 
 def _pip_requirement(req):
-    if req.startswith('-r '):
+    if req.startswith("-r "):
         _, path = req.split()
-        return reqs(*path.split('/'))
+        return reqs(*path.split("/"))
     return [req]
 
 
 def _reqs(*f):
     return [
-        _pip_requirement(r) for r in (
-            _strip_comments(l) for l in open(
-                os.path.join(os.getcwd(), 'requirements', *f)).readlines()
-        ) if r]
+        _pip_requirement(req)
+        for req in (_strip_comments(line) for line in open(os.path.join(os.getcwd(), "requirements", *f)).readlines())
+        if req
+    ]
 
 
 def reqs(*f):
@@ -52,9 +53,7 @@ setup(
     name="deepopt",
     author="Jayaraman Thiagarajan",
     author_email="jayaramanthi1@llnl.gov",
-    classifiers=[
-        "Programming Language :: Python3.8"
-    ],
+    classifiers=["Programming Language :: Python3.8"],
     description="A design optimization framework based on deep neural network surrogates.",
     long_description=long_description,
     url="https://lc.llnl.gov/gitlab/idesign/deepopt",
@@ -62,8 +61,8 @@ setup(
     packages=find_packages(),
     python_requires=">=3.8",
     entry_points={
-        'console_scripts': [
-            'deepopt-c = deepopt.deepopt_cli:main',
+        "console_scripts": [
+            "deepopt = deepopt.deepopt_cli:main",
         ]
     },
     version=version,
