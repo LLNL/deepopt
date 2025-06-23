@@ -51,12 +51,12 @@ with open("deepopt/__init__.py", "r") as version_file:
 
 setup(
     name="deepopt",
-    author="Jayaraman Thiagarajan",
-    author_email="jayaramanthi1@llnl.gov",
+    author="DeepOpt Dev Team",
+    author_email="deepopt@llnl.gov",
     classifiers=["Programming Language :: Python3.8"],
-    description="A design optimization framework based on deep neural network surrogates.",
+    description="Easy-to-use library for Bayesian optimization, with support for neural network surrogates.",
     long_description=long_description,
-    url="https://lc.llnl.gov/gitlab/idesign/deepopt",
+    url="https://github.com/LLNL/deepopt",
     install_requires=install_requires(),
     packages=find_packages(),
     python_requires=">=3.8",
