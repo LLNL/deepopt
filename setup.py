@@ -60,6 +60,7 @@ setup(
     description="Easy-to-use library for Bayesian optimization, with support for neural network surrogates.",
     long_description=long_description,
     url="https://github.com/LLNL/deepopt",
+    license="MIT",
     install_requires=install_requires(),
     packages=find_packages(),
     python_requires=">=3.8",
