@@ -53,7 +53,10 @@ setup(
     name="deepopt",
     author="DeepOpt Dev Team",
     author_email="deepopt@llnl.gov",
-    classifiers=["Programming Language :: Python3.8"],
+    classifiers=[        
+        "Programming Language :: Python :: 3.8",
+        "Programming Language :: Python :: 3.9",
+    ],
     description="Easy-to-use library for Bayesian optimization, with support for neural network surrogates.",
     long_description=long_description,
     url="https://github.com/LLNL/deepopt",
