@@ -396,7 +396,11 @@ class DeepoptBaseModel(ABC):
         bounds = torch.FloatTensor(self.input_dim * [[0, 1]]).T
 
         if acq_method == "EI":
-            q_acq = qExpectedImprovement(model, self.full_train_Y.max().item(), objective=risk_objective)
+            if hasattr(model,'out_scaler') and hasattr(model,'y_max') and hasattr(model,'y_min'):
+                max_y = model.out_scaler(self.full_train_Y.max(),model.y_min,model.y_max).item()
+            else:
+                max_y = self.full_train_Y.max().item()
+            q_acq = qExpectedImprovement(model, max_y, objective=risk_objective)
         elif acq_method == "NEI":
             q_acq = qNoisyExpectedImprovement(model, self.full_train_X, objective=risk_objective, prune_baseline=True)
             # TODO: Verify call syntax for qNoisyExpectedImprovement (why does it need inputs?)
