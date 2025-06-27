@@ -155,6 +155,8 @@ class MLP(nn.Module):
             self.B = None
             if self.unc_type == "deltaenc":
                 first_layer_dim = 2 * input_dim
+            else:
+                first_layer_dim = input_dim
 
         layers = []
         n_layers = self.config.get_setting("n_layers")
