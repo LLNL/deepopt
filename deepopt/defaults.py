@@ -22,6 +22,25 @@ DELUQ_CONFIG = {
     "variance": 0.001,
 }
 
+NNENSEMBLE_CONFIG = {"n_estimators": 100,
+                     "ff": True,
+                     "dist": "uniform",
+                     "mapping_size": 128,
+                     "n_layers": 4,
+                     "hidden_dim": 128,
+                     "activation": "relu",
+                     "dropout": True,
+                     "droupout_prob": 0.2,
+                     "batchnorm": False,
+                     "w0": 30,
+                     "activation_first": True,
+                     "opt_type": "Adam",
+                     "learning_rate": 0.001,
+                     "weight_decay": 0,
+                     "n_epochs": 300,
+                     "batch_size": 128,
+                     "variance": 0.001}
+
 GP_CONFIG = {}
 
 
@@ -31,7 +50,7 @@ class Defaults:
 
     :cvar random_seed: The default random seed. `Default value: 4321`
     :cvar k_folds: The default k-folds value. `Default value: 5`
-    :cvar model_type: The default model type. Options here are 'GP' or 'delUQ'.
+    :cvar model_type: The default model type. Options here are 'GP', 'delUQ', or 'nnEnsemble'.
         `Default value: 'GP'`
     :cvar multi_fidelity: The default value on whether to run multi-fidelity
         settings or not. `Default value: False`
