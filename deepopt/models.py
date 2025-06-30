@@ -43,6 +43,7 @@ from deepopt.acquisition import qMaxValueEntropy, qMultiFidelityLowerBoundMaxVal
 from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
 from deepopt.deltaenc import DeltaEnc
+from deepopt.nn_ensemble import NNEnsemble
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
@@ -912,6 +913,85 @@ class DelUQModel(DeepoptBaseModel):
         )
 
         # DeltaEnc model requries the parent path and file name to be separated.
+        # Extension of file is also removed and assumed to be ".ckpt".
+        if basename(learner_file).split(".")[-1] == "ckpt":
+            file_name = basename(learner_file)[:-5]
+        else:
+            file_name = basename(learner_file)
+        # file_name = basename(learner_file).split(".")[0]
+        dir_name = dirname(learner_file)
+        model.load_ckpt(dir_name, file_name)
+        return model
+
+class NNEnsembleModel(DeepoptBaseModel):
+    def train(self, outfile: str) -> Type[Model]:
+        """
+        Train the NN Ensemble surrogate and save the model produced. 
+
+        :param outfile: The name of the output file to save the model to
+
+        :returns: The NNEnsemble model produced by training the NN Ensemble surrogate.
+        """
+
+        print("Training NN Ensemble Surrogate.")
+
+        warnings.filterwarnings("ignore", category=UserWarning)
+        n_estimators = self.config_settings.get_setting("n_estimators")
+        nets = [Arch(
+            config=self.config_settings,
+            unc_type="ensemble",
+            input_dim=self.input_dim,
+            output_dim=self.output_dim,
+            device=self.device,
+        ) for _ in range(n_estimators)]
+        opts = [create_optimizer(net, self.config_settings) for net in nets]
+
+        model = NNEnsemble(
+            networks=nets,
+            config=self.config_settings,
+            optimizers=opts,
+            X_train=self.full_train_X,
+            y_train=self.full_train_Y,
+            multi_fidelity=self.multi_fidelity,
+        )
+
+        model.fit()
+        if basename(outfile).split(".")[-1] == "ckpt":
+            fname = basename(outfile)[:-5]
+        else:
+            fname = basename(outfile)
+        model.save_ckpt(join(getcwd(), dirname(outfile)), fname)
+        ray.shutdown()
+        return model
+
+    def load_model(self, learner_file: str) -> Type[Model]:
+        """
+        Load in the nnEnsemble model from the learner file.
+
+        :param learner_file: The learner file that has the model we want to load
+
+        :returns: A 'NNEnsemble' model.
+        """
+        n_estimators = self.config_settings.get_setting("n_estimators")
+        nets = [Arch(
+            config=self.config_settings,
+            unc_type="ensemble",
+            input_dim=self.input_dim,
+            output_dim=self.output_dim,
+            device=self.device,
+        ) for _ in range(n_estimators)]
+        opts = [create_optimizer(net, self.config_settings) for net in nets]
+
+        model = NNEnsemble(
+            networks=nets,
+            config=self.config_settings,
+            optimizers=opts,
+            X_train=self.full_train_X,
+            y_train=self.full_train_Y,
+            multi_fidelity=self.multi_fidelity,
+        )
+
+        # NNEnsemble model requries the parent path and file name to be separated.
         # Extension of file is also removed and assumed to be ".ckpt".
         if basename(learner_file).split(".")[-1] == "ckpt":
             file_name = basename(learner_file)[:-5]

@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from deepopt.defaults import DELUQ_CONFIG, GP_CONFIG
+from deepopt.defaults import DELUQ_CONFIG, GP_CONFIG, NNENSEMBLE_CONFIG
 
 
 class ConfigSettings:
@@ -20,7 +20,7 @@ class ConfigSettings:
         Set up the configurations by loading them from `config_file`.
 
         :param config_file: A path to the configuration file to load
-        :param model_type: A str representing the type of model (either GP or delUQ)
+        :param model_type: A str representing the type of model (`GP`, `delUQ`, or `nnEnsemble`)
         """
         self.config_file = config_file
         self.model_type = model_type
@@ -29,8 +29,10 @@ class ConfigSettings:
             self.default_config = GP_CONFIG
         elif self.model_type == "delUQ":
             self.default_config = DELUQ_CONFIG
+        elif self.model_type == 'nnEnsemble':
+            self.default_config = NNENSEMBLE_CONFIG
         else:
-            raise ValueError(f"The model type {self.model_type} has not yet been implemented. Options: 'GP' or 'delUQ'")
+            raise ValueError(f"The model type {self.model_type} has not yet been implemented. Options: 'GP', 'delUQ', or 'nnEnsemble'")
 
         self.config_settings = {"model_type": self.model_type}
         self.load_config()
