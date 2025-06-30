@@ -66,6 +66,7 @@ class Defaults:
         `Default value: 512`
     :cvar raw_samples_high: The default value for the number of raw samples to use (high).
         `Default value: 5000`
+    :cvar n_fantasies: The default value for the number of fantasy models to construct. `Default value: 128`
     """
 
     random_seed: int = 4321
@@ -78,3 +79,4 @@ class Defaults:
     num_restarts_high: int = 15
     raw_samples_low: int = 512
     raw_samples_high: int = 5000
+    n_fantasies: int = 128

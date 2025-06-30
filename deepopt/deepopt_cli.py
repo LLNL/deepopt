@@ -349,6 +349,20 @@ def learn(
     cls=ConditionalOption,
     depends_on="risk_measure",
 )
+@click.option(
+    "--n-fantasies",
+    help="Number of fantasy models to use.",
+    default=Defaults.n_fantasies,
+    type=click.INT,
+    show_default=True,
+)
+@click.option(
+    "--propose-best",
+    help="Select first candidate using surrogate optimum.",
+    type=click.BOOL,
+    default=False,
+    show_default=True,
+)
 def optimize(
     infile,
     outfile,
@@ -360,11 +374,13 @@ def optimize(
     model_type,
     num_candidates,
     multi_fidelity,
+    fidelity_cost,
     risk_measure,
     risk_level,
     risk_n_deltas,
     x_stddev,
-    fidelity_cost,
+    n_fantasies,
+    propose_best,
 ) -> None:
     """
     Load in the model created by `learn` and use it to propose new simulation points.
@@ -398,6 +414,8 @@ def optimize(
         risk_level=risk_level,
         risk_n_deltas=risk_n_deltas,
         x_stddev=x_stddev,
+        n_fantasies=n_fantasies,
+        propose_best=propose_best,
     )
 
 
