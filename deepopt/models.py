@@ -258,7 +258,7 @@ class DeepoptBaseModel(ABC):
         fidelity_cost: np.ndarray,
         risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
         risk_n_deltas: Optional[int] = None,
-        n_fantasies: Optional[int] = 128,
+        n_fantasies: Optional[int] = Defaults.n_fantasies,
         propose_best: Optional[bool] = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -407,7 +407,7 @@ class DeepoptBaseModel(ABC):
         q: int,
         risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
         risk_n_deltas: Optional[int] = None,
-        n_fantasies: Optional[int] = 128,
+        n_fantasies: Optional[int] = Defaults.n_fantasies,
         propose_best: Optional[bool] = False,
     ) -> Tuple[Any, Any]:
         """
@@ -515,7 +515,7 @@ class DeepoptBaseModel(ABC):
         risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
         risk_n_deltas: Optional[int] = None,
         fidelity_cost: Optional[np.ndarray] = None,
-        n_fantasies: Optional[int] = 128,
+        n_fantasies: Optional[int] = Defaults.n_fantasies,
         propose_best: Optional[bool] = False,
     ) -> Tuple[Any, Any]:
         """
@@ -579,7 +579,7 @@ class DeepoptBaseModel(ABC):
         risk_level: float = None,
         risk_n_deltas: int = None,
         x_stddev: str = None,
-        n_fantasies: int = 128,
+        n_fantasies: int = Defaults.n_fantasies,
         propose_best: bool = False,
     ) -> None:
         """
