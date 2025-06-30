@@ -258,6 +258,7 @@ class DeepoptBaseModel(ABC):
         risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
         risk_n_deltas: Optional[int] = None,
         n_fantasies: Optional[int] = 128,
+        propose_best: Optional[bool] = False,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Get the candidates for a multi-fidelity run.
@@ -277,6 +278,9 @@ class DeepoptBaseModel(ABC):
         :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
         :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
             the model (at the expense of model complexity and performance).
+        :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
+            while the rest are acquired by the specified acquisition method. If `False`, acquire all points
+            with the acquisition method as usual.
 
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
@@ -286,6 +290,33 @@ class DeepoptBaseModel(ABC):
 
         cost_model = FidelityCostModel(fidelity_weights=fidelity_cost)
         cost_aware_utility = InverseCostWeightedUtility(cost_model=cost_model)
+
+        if propose_best:
+            curr_val_acqf = FixedFeatureAcquisitionFunction(
+                acq_function=PosteriorMean(
+                    model,
+                    posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
+                ),
+                d=self.input_dim,
+                columns=[self.input_dim - 1],
+                values=[self.num_fidelities - 1],
+            )
+
+            best_candidate, max_pmean = optimize_acqf(
+                acq_function=curr_val_acqf,
+                bounds=bounds[:, :-1],
+                q=1,
+                num_restarts=Defaults.num_restarts_high,
+                raw_samples=Defaults.raw_samples_high,
+                options={"batch_limit": 10, "maxiter": 200, "seed": self.random_seed},
+            )
+            q-=1
+            if q==0:
+                acq_value = max_pmean
+                print(f"{acq_value = }")
+                candidates = torch.concat([best_candidate.reshape(1,-1),(self.num_fidelities-1)*torch.ones(1,1)],axis=1)
+                return candidates, acq_value
+
 
         if acq_method in ("GIBBON", "MaxValEntropy"):
             n_candidates = 2000 * self.num_fidelities
@@ -321,31 +352,33 @@ class DeepoptBaseModel(ABC):
                 options={"seed": self.random_seed},
             )
         elif acq_method == "KG":
-            curr_val_acqf = FixedFeatureAcquisitionFunction(
-                acq_function=PosteriorMean(
-                    model,
-                    posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
-                ),
-                d=self.input_dim,
-                columns=[self.input_dim - 1],
-                values=[self.num_fidelities - 1],
-            )
+            if not propose_best:
+                curr_val_acqf = FixedFeatureAcquisitionFunction(
+                    acq_function=PosteriorMean(
+                        model,
+                        posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
+                    ),
+                    d=self.input_dim,
+                    columns=[self.input_dim - 1],
+                    values=[self.num_fidelities - 1],
+                )
 
-            _, current_value = optimize_acqf(
-                acq_function=curr_val_acqf,
-                bounds=bounds[:, :-1],
-                q=1,
-                num_restarts=Defaults.num_restarts_high,
-                raw_samples=Defaults.raw_samples_high,
-                options={"batch_limit": 10, "maxiter": 200, "seed": self.random_seed},
-            )
+                _, max_pmean = optimize_acqf(
+                    acq_function=curr_val_acqf,
+                    bounds=bounds[:, :-1],
+                    q=1,
+                    num_restarts=Defaults.num_restarts_high,
+                    raw_samples=Defaults.raw_samples_high,
+                    options={"batch_limit": 10, "maxiter": 200, "seed": self.random_seed},
+                )
+            
 
             mfkg_acqf = qMultiFidelityKnowledgeGradient(
                 model=model,
                 num_fantasies=n_fantasies,
                 sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
                 inner_sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
-                current_value=current_value,
+                current_value=max_pmean,
                 cost_aware_utility=cost_aware_utility,
                 project=self._project,
                 objective=risk_objective,
@@ -359,6 +392,9 @@ class DeepoptBaseModel(ABC):
                 raw_samples=Defaults.raw_samples_low,
                 options={"batch_limit": 5, "maxiter": 200, "seed": self.random_seed},
             )
+        if propose_best:
+            best_candidate = torch.concat([best_candidate.reshape(1,-1),(self.num_fidelities-1)*torch.ones(1,1)],axis=1)
+            candidates = torch.concat([best_candidate,candidates],axis=0)
 
         print(f"{acq_value = }")
         return candidates, acq_value
@@ -371,6 +407,7 @@ class DeepoptBaseModel(ABC):
         risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
         risk_n_deltas: Optional[int] = None,
         n_fantasies: Optional[int] = 128,
+        propose_best: Optional[bool] = False,
     ) -> Tuple[Any, Any]:
         """
         Get the candidates for a single-fidelity run.
@@ -389,11 +426,31 @@ class DeepoptBaseModel(ABC):
         :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
         :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
             the model (at the expense of model complexity and performance).
-
+        :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
+            while the rest are acquired by the specified acquisition method. If `False`, acquire all points
+            with the acquisition method as usual.
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
         """
         bounds = torch.FloatTensor(self.input_dim * [[0, 1]]).T
+
+        if propose_best:
+            best_candidate, max_pmean = optimize_acqf(
+                acq_function=PosteriorMean(
+                    model,
+                    posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
+                ),
+                bounds=bounds,
+                q=1,
+                num_restarts=Defaults.num_restarts_high,
+                raw_samples=Defaults.raw_samples_high,
+            )
+            q-=1
+            if q==0:
+                acq_value = max_pmean
+                print(f"{acq_value = }")
+                candidates = best_candidate.reshape(1,-1)
+                return candidates, acq_value
 
         if acq_method == "EI":
             if hasattr(model,'out_scaler') and hasattr(model,'y_max') and hasattr(model,'y_min'):
@@ -415,16 +472,18 @@ class DeepoptBaseModel(ABC):
                 seed=self.random_seed,
             )
         elif acq_method == "KG":
-            _, max_pmean = optimize_acqf(
-                acq_function=PosteriorMean(
-                    model,
-                    posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
-                ),
-                bounds=bounds,
-                q=1,
-                num_restarts=Defaults.num_restarts_high,
-                raw_samples=Defaults.raw_samples_high,
-            )
+            if not propose_best:
+                _, max_pmean = optimize_acqf(
+                    acq_function=PosteriorMean(
+                        model,
+                        posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
+                    ),
+                    bounds=bounds,
+                    q=1,
+                    num_restarts=Defaults.num_restarts_high,
+                    raw_samples=Defaults.raw_samples_high,
+                )
+            
             q_acq = qKnowledgeGradient(
                 model=model,
                 num_fantasies=n_fantasies,
@@ -442,8 +501,10 @@ class DeepoptBaseModel(ABC):
             sequential=(acq_method == "MaxValEntropy"),
             options={"seed": self.random_seed},
         )
+        if propose_best:
+            candidates = torch.concat([best_candidate.reshape(1,-1),candidates],axis=0)
         print(f"{acq_value=}")
-        return candidates, q_acq
+        return candidates, acq_value
 
     def get_candidates(
         self,
@@ -454,6 +515,7 @@ class DeepoptBaseModel(ABC):
         risk_n_deltas: Optional[int] = None,
         fidelity_cost: Optional[np.ndarray] = None,
         n_fantasies: Optional[int] = 128,
+        propose_best: Optional[bool] = False,
     ) -> Tuple[Any, Any]:
         """
         Get the candidates using the model loaded in with `load_model` and the acquisition method
@@ -470,6 +532,9 @@ class DeepoptBaseModel(ABC):
         :param fidelity_cost: A list of how expensive each fidelity should be seen as
         :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
             the model (at the expense of model complexity and performance).
+        :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
+            while the rest are acquired by the specified acquisition method. If `False`, acquire all points
+            with the acquisition method as usual.
 
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
@@ -488,6 +553,7 @@ class DeepoptBaseModel(ABC):
                 risk_objective=risk_objective,
                 risk_n_deltas=risk_n_deltas,
                 n_fantasies=n_fantasies,
+                propose_best=propose_best,
             )
         else:
             candidates, acq_value = self._get_candidates_sf(
@@ -497,6 +563,7 @@ class DeepoptBaseModel(ABC):
                 risk_objective=risk_objective,
                 risk_n_deltas=risk_n_deltas,
                 n_fantasies=n_fantasies,
+                propose_best=propose_best,
             )
         return candidates, acq_value
 
@@ -512,6 +579,7 @@ class DeepoptBaseModel(ABC):
         risk_n_deltas: int = None,
         x_stddev: str = None,
         n_fantasies: int = 128,
+        propose_best: bool = False,
     ) -> None:
         """
         The function to process the `deepopt optimize` command.
@@ -532,6 +600,9 @@ class DeepoptBaseModel(ABC):
         :param x_stddev: Uncertainity in X (stddev) in each dimension
         :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
             the model (at the expense of model complexity and performance).
+        :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
+            while the rest are acquired by the specified acquisition method. If `False`, acquire all points
+            with the acquisition method as usual.            
         """
         print(
             f"""
@@ -573,6 +644,7 @@ class DeepoptBaseModel(ABC):
             risk_n_deltas=risk_n_deltas,
             fidelity_cost=fidelity_cost,
             n_fantasies=n_fantasies,
+            propose_best=propose_best,
         )
         if self.multi_fidelity:
             candidates[:, :-1] = candidates[:, :-1] * (self.bounds[1, :-1] - self.bounds[0, :-1] + self.bounds[0, :-1])
