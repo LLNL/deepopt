@@ -30,7 +30,8 @@ python generate_simulation_inputs.py
 ```
 
 ### Default neural network
-Neural networks in DeepOpt use the ["delta-UQ"](https://arxiv.org/abs/2110.02197) method for uncertainty quantification. The naming conventions reflect this, so to use neural networks, we set the `model_type` to "delUQ" and the model class is called `DelUQModel`.
+DeepOpt currently supports the ensemble method for uncertainty quantification with neural networks. The naming convention of the model reflects this, so to use neural networks, we set the `model_type` to "nnEnsemble" and the mode class is called `NNEnsembleModel`.
+<!-- Neural networks in DeepOpt use the ["delta-UQ"](https://arxiv.org/abs/2110.02197) method for uncertainty quantification. The naming conventions reflect this, so to use neural networks, we set the `model_type` to "delUQ" and the model class is called `DelUQModel`. -->
 
 From here we can either use the DeepOpt API or we can use the DeepOpt CLI.
 
@@ -42,7 +43,7 @@ from deepopt.configuration import ConfigSettings
 from deepopt.deepopt_cli import get_deepopt_model
 
 input_dim = 5 #(1)
-model_type = 'delUQ' #(2)
+model_type = 'nnEnsemble' #(2)
 model_class = get_deepopt_model(model_type=model_type) #(3)
 cs = ConfigSettings(model_type=model_type) #(4)
 bounds = torch.FloatTensor(input_dim*[[0,1]]).T  #(5)
@@ -51,10 +52,10 @@ model = model_class(data_file='sims.npz', bounds=bounds, config_settings=cs)  #(
 
 1. Input dimension must match data file (`sims.npz` in this case)
 2. Set the model type to use throughout the script.
-3. Set the model class associated with the selected model type (in this case `DelUQModel`)
+3. Set the model class associated with the selected model type (in this case `NNEnsembleModel`)
 4. This sets up the neural network configuration (more generally the model configuration). Since we don't pass a configuration file, the default configuration will be used.
 5. Learning and optimizing will take place within these input bounds
-6. Model is loaded the same way as with GP, but now we are using `DelUQModel`
+6. Model is loaded the same way as with GP, but now we are using `NNEnsembleModel`
 
 Training and optimizing are done as in [Getting Started](../index.md#getting-started-with-deepopt), with the array of new points being recorded in 'suggested_inputs.npy':
 
@@ -71,7 +72,7 @@ Training and optimizing are done as in [Getting Started](../index.md#getting-sta
     bounds = ""
     for i in {1..input_dim-1}; do bounds+="[0,1],"; done
     bounds+="[0,1]" #(1)
-    deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds
+    deepopt learn -i sims.npz -o learner_nnEnsemble.ckpt -m nnEnsemble -b $bounds
     ```
 
     1. Together with the previous 2 lines, this defines the appropriate `bounds` variable to match `input_dim`.
@@ -79,16 +80,16 @@ Training and optimizing are done as in [Getting Started](../index.md#getting-sta
 The checkpoint files saved by DeepOpt use `torch.save` under the hood. They are python dictionaries and can be viewed using `torch.load`:
 ```py title="view_ckpt.py" linenums="1"
 import torch
-model_type = 'delUQ'
+model_type = 'nnEnsemble'
 ckpt = torch.load(f'learner_{model_type}.ckpt')
 print(ckpt.keys())
 ```
-The delUQ model has 4 entries in the checkpoint dictionary:
+The nnEnsemble model has 4 entries in the checkpoint dictionary:
 
-- `epoch`: is the number of epochs the NN was trained for 
-- `state_dict`: is a dictionary containing all of the values of the NN weights, biases, and other layer parameters 
-- `B`: is the initial transformation to frequency space when using Fourier features 
-- `opt_state_dict`: contains the optimizer parameters.
+- `epoch`: is the number of epochs each NN in the ensemble was trained for 
+- `state_dict`: is a list of dictionaries, each containing all of the values of the NN weights, biases, and other layer parameters for the respective NN in the ensemble
+- `B`: is the list of initial transformations to frequency space for each NN in the ensemble when using Fourier features 
+- `opt_state_dict`: is a list containing the optimizer parameters for each NN in the ensemble
 
 Now that we saved the trained model, we can use it to propose new candidate points:
 
@@ -103,8 +104,8 @@ Now that we saved the trained model, we can use it to propose new candidate poin
 
 === "DeepOpt CLI"
     ```bash
-    deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt \
-    -m delUQ -b $bounds -a EI
+    deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_nnEnsemble.ckpt \
+    -m nnEnsemble -b $bounds -a EI
     ```
 
 If you're using the DeepOpt API, we can now run our script with:
@@ -132,7 +133,7 @@ Simply create a configuration yaml file with the desired entries (available sett
                    acq_method='EI') #(2)    
     ```
 
-    1. Train the neural network and save its state to a checkpoint file.
+    1. Train the neural network ensemble and save its state to a checkpoint file.
     2. Use [Expected Improvement](./acquisition_functions.md#ei) to acquire new points based on the model saved in `learner_file` and save those points as a `numpy` array in `outfile`.
 
 === "DeepOpt CLI"
@@ -141,15 +142,15 @@ Simply create a configuration yaml file with the desired entries (available sett
     bounds = ""
     for i in {1..input_dim-1}; do bounds+="[0,1],"; done
     bounds+="[0,1]" #(1)
-    deepopt learn -i sims.npz -o learner_delUQ.ckpt -m delUQ -b $bounds -c config.yaml #(2)
+    deepopt learn -i sims.npz -o learner_nnEnsemble.ckpt -m nnEnsemble -b $bounds -c config.yaml #(2)
 
-    deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_delUQ.ckpt \
-    -m delUQ -b $bounds -a EI -c config.yaml #(3)
+    deepopt optimize -i sims.npz -o suggested_inputs.npy -l learner_nnEnsemble.ckpt \
+    -m nnEnsemble -b $bounds -a EI -c config.yaml #(3)
     ```
 
     1. Together with the 2 previous lines, this defines the appropriate `bounds` variable to match `input_dim`.
-    2. Train the neural network and save its state to a checkpoint file.
-    3. Use [Expected Improvement](./acquisition_functions.md#ei) to acquire new points based on the model saved in `learner_delUQ.ckpt` and save those points as a `numpy` array in `suggested_inputs.npy`.
+    2. Train the neural network ensemble and save its state to a checkpoint file.
+    3. Use [Expected Improvement](./acquisition_functions.md#ei) to acquire new points based on the model saved in `learner_nnEnsemble.ckpt` and save those points as a `numpy` array in `suggested_inputs.npy`.
 
 
 ## Tutorial: Iterative optimization
@@ -224,7 +225,7 @@ import argparse
 num_initial_points = 10
 num_iterations = 20
 
-#Read in results directory and directory to save figure to from command line or default to local subdirectory
+#Read in results directory and directory in which to save figure from command line or default to local subdirectory
 parser = argparse.ArgumentParser(description="Read output directory.")
 parser.add_argument("results_directory", type=str, 
                     help="directory of optimization results", 

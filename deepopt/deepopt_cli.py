@@ -13,10 +13,10 @@ from click.core import iter_params_for_processing
 
 from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
-from deepopt.models import DelUQModel, GPModel
+from deepopt.models import DelUQModel, GPModel, NNEnsembleModel
 
 
-def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel]:
+def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel, NNEnsembleModel]:
     """
     Given the type of model by the user, return the correct model
     object from the DeepOpt library to use for training/optimizing.
@@ -29,8 +29,10 @@ def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel]:
         deepopt_model = GPModel
     elif model_type == "delUQ":
         deepopt_model = DelUQModel
+    elif model_type == "nnEnsemble":
+        deepopt_model = NNEnsembleModel
     else:
-        raise ValueError(f"The model type {model_type} is not a valid DeepOpt model. Valid models are 'GP' and 'delUQ'.")
+        raise ValueError(f"The model type {model_type} is not a valid DeepOpt model. Valid models are 'GP', 'delUQ', and 'nnEnsemble'.")
 
     return deepopt_model
 
@@ -166,7 +168,7 @@ def deepopt_cli():
     help="What kind of surrogate are you using?",
     default=Defaults.model_type,
     show_default=True,
-    type=click.Choice(["GP", "delUQ"]),
+    type=click.Choice(["GP", "delUQ","nnEnsemble"]),
 )
 @click.option(
     "-c",
@@ -278,7 +280,7 @@ def learn(
     help="What kind of surrogate are you using?",
     show_default=True,
     default=Defaults.model_type,
-    type=click.Choice(["GP", "delUQ"]),
+    type=click.Choice(["GP", "delUQ","nnEnsemble"]),
 )
 @click.option(
     "-c",
@@ -347,6 +349,20 @@ def learn(
     cls=ConditionalOption,
     depends_on="risk_measure",
 )
+@click.option(
+    "--n-fantasies",
+    help="Number of fantasy models to use.",
+    default=Defaults.n_fantasies,
+    type=click.INT,
+    show_default=True,
+)
+@click.option(
+    "--propose-best",
+    help="Select first candidate using surrogate optimum.",
+    type=click.BOOL,
+    default=False,
+    show_default=True,
+)
 def optimize(
     infile,
     outfile,
@@ -358,11 +374,13 @@ def optimize(
     model_type,
     num_candidates,
     multi_fidelity,
+    fidelity_cost,
     risk_measure,
     risk_level,
     risk_n_deltas,
     x_stddev,
-    fidelity_cost,
+    n_fantasies,
+    propose_best,
 ) -> None:
     """
     Load in the model created by `learn` and use it to propose new simulation points.
@@ -396,6 +414,8 @@ def optimize(
         risk_level=risk_level,
         risk_n_deltas=risk_n_deltas,
         x_stddev=x_stddev,
+        n_fantasies=n_fantasies,
+        propose_best=propose_best,
     )
 
 
