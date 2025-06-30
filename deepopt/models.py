@@ -453,6 +453,7 @@ class DeepoptBaseModel(ABC):
         risk_objective: Optional[Type[RiskMeasureMCObjective]] = None,
         risk_n_deltas: Optional[int] = None,
         fidelity_cost: Optional[np.ndarray] = None,
+        n_fantasies: Optional[int] = 128,
     ) -> Tuple[Any, Any]:
         """
         Get the candidates using the model loaded in with `load_model` and the acquisition method
@@ -467,6 +468,8 @@ class DeepoptBaseModel(ABC):
             command.
         :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
         :param fidelity_cost: A list of how expensive each fidelity should be seen as
+        :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
+            the model (at the expense of model complexity and performance).
 
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
@@ -484,6 +487,7 @@ class DeepoptBaseModel(ABC):
                 fidelity_cost=fidelity_cost,
                 risk_objective=risk_objective,
                 risk_n_deltas=risk_n_deltas,
+                n_fantasies=n_fantasies,
             )
         else:
             candidates, acq_value = self._get_candidates_sf(
@@ -492,6 +496,7 @@ class DeepoptBaseModel(ABC):
                 q=q,
                 risk_objective=risk_objective,
                 risk_n_deltas=risk_n_deltas,
+                n_fantasies=n_fantasies,
             )
         return candidates, acq_value
 
@@ -506,6 +511,7 @@ class DeepoptBaseModel(ABC):
         risk_level: float = None,
         risk_n_deltas: int = None,
         x_stddev: str = None,
+        n_fantasies: int = 128,
     ) -> None:
         """
         The function to process the `deepopt optimize` command.
@@ -524,6 +530,8 @@ class DeepoptBaseModel(ABC):
         :param risk_level: The risk level (a float between 0 and 1)
         :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
         :param x_stddev: Uncertainity in X (stddev) in each dimension
+        :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
+            the model (at the expense of model complexity and performance).
         """
         print(
             f"""
@@ -564,6 +572,7 @@ class DeepoptBaseModel(ABC):
             risk_objective=risk_objective,
             risk_n_deltas=risk_n_deltas,
             fidelity_cost=fidelity_cost,
+            n_fantasies=n_fantasies,
         )
         if self.multi_fidelity:
             candidates[:, :-1] = candidates[:, :-1] * (self.bounds[1, :-1] - self.bounds[0, :-1] + self.bounds[0, :-1])
