@@ -43,6 +43,7 @@ NNENSEMBLE_CONFIG = {"n_estimators": 100,
 
 GP_CONFIG = {}
 
+TABPFN_CONFIG = {}
 
 class Defaults:
     """

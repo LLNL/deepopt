@@ -13,10 +13,10 @@ from click.core import iter_params_for_processing
 
 from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
-from deepopt.models import DelUQModel, GPModel, NNEnsembleModel
+from deepopt.models import DelUQModel, GPModel, NNEnsembleModel, TabPFNModel
 
 
-def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel, NNEnsembleModel]:
+def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel, NNEnsembleModel, TabPFNModel]:
     """
     Given the type of model by the user, return the correct model
     object from the DeepOpt library to use for training/optimizing.
@@ -31,8 +31,10 @@ def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel, NNEnsembleM
         deepopt_model = DelUQModel
     elif model_type == "nnEnsemble":
         deepopt_model = NNEnsembleModel
+    elif model_type == 'TabPFN':
+        deepopt_model = TabPFNModel
     else:
-        raise ValueError(f"The model type {model_type} is not a valid DeepOpt model. Valid models are 'GP', 'delUQ', and 'nnEnsemble'.")
+        raise ValueError(f"The model type {model_type} is not a valid DeepOpt model. Valid models are 'GP', 'delUQ', 'nnEnsemble', and 'TabPFN'.")
 
     return deepopt_model
 
@@ -168,7 +170,7 @@ def deepopt_cli():
     help="What kind of surrogate are you using?",
     default=Defaults.model_type,
     show_default=True,
-    type=click.Choice(["GP", "delUQ","nnEnsemble"]),
+    type=click.Choice(["GP", "delUQ","nnEnsemble","TabPFN"]),
 )
 @click.option(
     "-c",
@@ -280,7 +282,7 @@ def learn(
     help="What kind of surrogate are you using?",
     show_default=True,
     default=Defaults.model_type,
-    type=click.Choice(["GP", "delUQ","nnEnsemble"]),
+    type=click.Choice(["GP", "delUQ","nnEnsemble","TabPFN"]),
 )
 @click.option(
     "-c",

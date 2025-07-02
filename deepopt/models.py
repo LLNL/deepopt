@@ -44,6 +44,7 @@ from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
 from deepopt.deltaenc import DeltaEnc
 from deepopt.nn_ensemble import NNEnsemble
+from deepopt.surrogate_tabpfn import TabPFN
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
@@ -1000,4 +1001,44 @@ class NNEnsembleModel(DeepoptBaseModel):
         # file_name = basename(learner_file).split(".")[0]
         dir_name = dirname(learner_file)
         model.load_ckpt(dir_name, file_name)
+        return model
+    
+class TabPFNModel(DeepoptBaseModel):
+    def train(self, outfile: str) -> Type[Model]:
+        """
+        There is no pre-training for a TabPFN surrogate, so this model will simply load the
+        pre-trained TabPFN transformer.
+
+        :param outfile: The name of the output file to save the model to (not implemented yet)
+
+        :returns: The `TabPFN` model
+        """
+
+        print("Loading TabPFN Surrogate.")
+        
+        model = TabPFN(
+            X_train=self.full_train_X,
+            y_train=self.full_train_Y,
+            multi_fidelity=self.multi_fidelity,
+            seed=self.random_seed,
+            device=self.device,
+        )
+
+        return model
+
+    def load_model(self, learner_file: str) -> Type[Model]:
+        """
+        Load in the TabPFN model (currently directly from website)
+
+        :param learner_file: The learner file that has the model we want to load (not implemented yet)
+
+        :returns: A 'TabPFN' model.
+        """
+        model = TabPFN(
+            X_train=self.full_train_X,
+            y_train=self.full_train_Y,
+            multi_fidelity=self.multi_fidelity,
+            seed=self.random_seed,
+            device=self.device,
+        )
         return model
