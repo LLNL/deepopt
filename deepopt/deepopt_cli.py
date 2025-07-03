@@ -64,10 +64,13 @@ class DeepoptCommand(click.Command):
 
         # Custom functionality to place conditional options last in the param order
         conditional_opts = []
-        for i, param in enumerate(param_order[:]):
+        nonconditional_opts = []
+        for param in param_order:
             if isinstance(param, ConditionalOption):
-                conditional_opts.append(param_order.pop(i))
-        param_order += conditional_opts
+                conditional_opts.append(param)
+            else:
+                nonconditional_opts.append(param)
+        param_order = nonconditional_opts + conditional_opts
 
         for param in iter_params_for_processing(param_order, self.get_params(ctx)):
             value, args = param.handle_parse_result(ctx, opts, args)
