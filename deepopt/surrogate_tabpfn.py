@@ -59,7 +59,7 @@ class TabPFN(Model):
         # self.n_estimators = len(networks)
 
         # self.f_predictor = networks
-        self.f_predictor, self.criterion, self.tabpfn_config = load_model_criterion_config(
+        self.tabpfn_model, self.criterion, self.tabpfn_config = load_model_criterion_config(
             model_path=None,
             which='regressor',
             version='v2',
@@ -69,9 +69,9 @@ class TabPFN(Model):
             model_seed=np.random.randint(0,10000) if seed is None else seed
         )
         self.device = device
-        self.f_predictor.to(device)
+        self.tabpfn_model.to(device)
         self.criterion.border = self.criterion.borders.to(device)
-        self.f_predictor.eval()
+        self.tabpfn_model.eval()
         # self.f_optimizer = optimizers
         # self.config = config
         # self.device = networks[0].device  # might not work for multi-networks
@@ -128,12 +128,39 @@ class TabPFN(Model):
 
         self.nn_input_dim = self.X_train_nn.shape[1]
         self.nn_output_dim = self.y_train_nn.shape[1]
+        
+        hist, bins = torch.histogram(self.y_train_nn[:,0],bins=10,range=(0,1))
+        bin_pairs = torch.stack((bins[:-1],bins[1:]),axis=1)
+        nonzero_bin_pairs = bin_pairs[hist>0]
+        bin_progression = np.linspace(1,2,len(nonzero_bin_pairs))
+        # bin_progression = bin_progression*len(nonzero_bin_pairs)/bin_progression.sum()
+        # n_pts_bin = int(max(1000,len(self.y_train_nn))/len(nonzero_bin_pairs))
+        n_pts_bin = max(1000,len(self.y_train_nn))*bin_progression/bin_progression.sum()
+        n_pts_bin = n_pts_bin.astype(int)
+        x_adjust, y_adjust = [], []
+        for bin_pair in nonzero_bin_pairs:
+            if bin_pair[0]==0:
+                locs = self.y_train_nn[:,0]<=bin_pair[1]
+            elif bin_pair[1]==1:
+                locs = self.y_train_nn[:,0]>=bin_pair[0]
+            else:
+                locs = (self.y_train_nn[:,0]>=bin_pair[0])&(self.y_train_nn[:,0]<=bin_pair[1])
+            xs,ys = self.X_train_nn[locs], self.y_train_nn[locs]
+            choice = np.random.choice(len(xs),n_pts_bin,replace=True)
+            x_adjust.append(xs[choice])
+            y_adjust.append(ys[choice])
+        self.X_train_tabpfn = torch.cat(x_adjust,axis=0)
+        self.y_train_tabpfn = torch.cat(y_adjust,axis=0)
 
         # self.loss_fn = nn.MSELoss()
 
         self.train_inputs = self.X_train
         if self.train_inputs is not None and torch.is_tensor(self.train_inputs):
             self.train_inputs = (self.train_inputs,)
+            
+        self.f_predictor = lambda q: self.tabpfn_model(train_x=self.X_train_tabpfn.unsqueeze(-2),
+                                                       train_y=self.y_train_tabpfn.unsqueeze(-2),
+                                                       test_x=q.unsqueeze(-2),categorical_inds=None)
 
     @property
     def batch_shape(self):
@@ -346,7 +373,7 @@ class TabPFN(Model):
                         return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1]))
 
         else:
-            means, variances = self.get_prediction_with_uncertainty(X, **kwargs)
+            means, variances = self.get_prediction_with_uncertainty(X, get_cov=False, original_scale=False, **kwargs)
             if means.ndim in (1, 2):
                 means_squeeze, variances_squeeze = means.squeeze(), variances.squeeze()
                 if means_squeeze.ndim == 0:
@@ -415,11 +442,12 @@ class TabPFN(Model):
         q_combine_samples = q_move.reshape(-1, *self.batch_shape, self.input_dim)
         q_reshape = q_combine_samples.reshape(q_combine_samples.shape[0], -1)
         
-        output_logits_bar_dist = self.f_predictor(
-            train_x=self.X_train_nn.unsqueeze(-2),
-            train_y=self.y_train_nn.unsqueeze(-2),
-            test_x=q_reshape.unsqueeze(-2),
-            categorical_inds=None)
+        # output_logits_bar_dist = self.f_predictor(
+        #     train_x=self.X_train_nn.unsqueeze(-2),
+        #     train_y=self.y_train_nn.unsqueeze(-2),
+        #     test_x=q_reshape.unsqueeze(-2),
+        #     categorical_inds=None)
+        output_logits_bar_dist = self.f_predictor(q_reshape)        
         # val = []
         # for f_pred in self.f_predictor:
         #     f_pred.eval()
