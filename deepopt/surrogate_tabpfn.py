@@ -138,7 +138,7 @@ class TabPFN(Model):
         n_pts_bin = max(1000,len(self.y_train_nn))*bin_progression/bin_progression.sum()
         n_pts_bin = n_pts_bin.astype(int)
         x_adjust, y_adjust = [], []
-        for bin_pair in nonzero_bin_pairs:
+        for bin_pair,n_pts in zip(nonzero_bin_pairs,n_pts_bin):
             if bin_pair[0]==0:
                 locs = self.y_train_nn[:,0]<=bin_pair[1]
             elif bin_pair[1]==1:
@@ -146,7 +146,7 @@ class TabPFN(Model):
             else:
                 locs = (self.y_train_nn[:,0]>=bin_pair[0])&(self.y_train_nn[:,0]<=bin_pair[1])
             xs,ys = self.X_train_nn[locs], self.y_train_nn[locs]
-            choice = np.random.choice(len(xs),n_pts_bin,replace=True)
+            choice = np.random.choice(len(xs),n_pts,replace=True)
             x_adjust.append(xs[choice])
             y_adjust.append(ys[choice])
         self.X_train_tabpfn = torch.cat(x_adjust,axis=0)
@@ -158,6 +158,8 @@ class TabPFN(Model):
         if self.train_inputs is not None and torch.is_tensor(self.train_inputs):
             self.train_inputs = (self.train_inputs,)
             
+        print(f'Full train X,Y shapes: {self.X_train.shape}, {self.y_train.shape}')
+        print(f'TabPFN training X,Y shapes: {self.X_train_tabpfn.shape}, {self.y_train_tabpfn.shape}')
         self.f_predictor = lambda q: self.tabpfn_model(train_x=self.X_train_tabpfn.unsqueeze(-2),
                                                        train_y=self.y_train_tabpfn.unsqueeze(-2),
                                                        test_x=q.unsqueeze(-2),categorical_inds=None)
@@ -409,6 +411,7 @@ class TabPFN(Model):
             `get_cov=True`) tensor
         """
         orig_input_shape = q.shape
+        print(f'Querying TabPFN with tensor shape {orig_input_shape}')
         assert (
             q.shape[-1] == self.input_dim
         ), f"Expected tensor to have size=input_dim ({self.input_dim}) in last dimension, found tensor of shape {q.shape}"
