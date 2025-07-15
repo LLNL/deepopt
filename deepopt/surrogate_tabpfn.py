@@ -25,7 +25,7 @@ from deepopt.surrogate_utils import create_optimizer
 from tabpfn.base import load_model_criterion_config
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
-
+_MAX_TOKENS_PER_FORWARD = 3000 
 
 class TabPFN(Model):
     """
@@ -66,11 +66,11 @@ class TabPFN(Model):
             download=True,
             check_bar_distribution_criterion=False,
             cache_trainset_representation=False,
-            model_seed=np.random.randint(0,10000) if seed is None else seed
+            # model_seed=np.random.randint(0,10000) if seed is None else seed
         )
         self.device = device
-        self.tabpfn_model.to(device)
-        self.criterion.border = self.criterion.borders.to(device)
+        self.tabpfn_model.to(self.device)
+        self.criterion.to(self.device)
         self.tabpfn_model.eval()
         # self.f_optimizer = optimizers
         # self.config = config
@@ -81,8 +81,8 @@ class TabPFN(Model):
         X_train = X_train.float()
         y_train = y_train.float()
 
-        self.X_train = X_train
-        self.y_train = y_train
+        self.X_train = X_train.to(self.device)
+        self.y_train = y_train.to(self.device)
 
         self.input_dim = X_train.shape[-1]
         self.output_dim = y_train.shape[-1]
@@ -129,7 +129,9 @@ class TabPFN(Model):
         self.nn_input_dim = self.X_train_nn.shape[1]
         self.nn_output_dim = self.y_train_nn.shape[1]
         
-        hist, bins = torch.histogram(self.y_train_nn[:,0],bins=10,range=(0,1))
+        # hist, bins = torch.histogram(self.y_train_nn[:,0],bins=10,range=(0,1))
+        hist = torch.histc(self.y_train_nn[:,0], bins=10, min=0, max=1)
+        bins = torch.linspace(0, 1, steps=11, device=self.device)
         bin_pairs = torch.stack((bins[:-1],bins[1:]),axis=1)
         nonzero_bin_pairs = bin_pairs[hist>0]
         bin_progression = np.linspace(1,2,len(nonzero_bin_pairs))
@@ -138,7 +140,7 @@ class TabPFN(Model):
         n_pts_bin = max(1000,len(self.y_train_nn))*bin_progression/bin_progression.sum()
         n_pts_bin = n_pts_bin.astype(int)
         x_adjust, y_adjust = [], []
-        for bin_pair in nonzero_bin_pairs:
+        for bin_pair,n_pts in zip(nonzero_bin_pairs,n_pts_bin):
             if bin_pair[0]==0:
                 locs = self.y_train_nn[:,0]<=bin_pair[1]
             elif bin_pair[1]==1:
@@ -146,11 +148,11 @@ class TabPFN(Model):
             else:
                 locs = (self.y_train_nn[:,0]>=bin_pair[0])&(self.y_train_nn[:,0]<=bin_pair[1])
             xs,ys = self.X_train_nn[locs], self.y_train_nn[locs]
-            choice = np.random.choice(len(xs),n_pts_bin,replace=True)
+            choice = np.random.choice(len(xs),n_pts,replace=True)
             x_adjust.append(xs[choice])
             y_adjust.append(ys[choice])
-        self.X_train_tabpfn = torch.cat(x_adjust,axis=0)
-        self.y_train_tabpfn = torch.cat(y_adjust,axis=0)
+        self.X_train_tabpfn = torch.cat(x_adjust,axis=0).to(self.device)
+        self.y_train_tabpfn = torch.cat(y_adjust,axis=0).to(self.device)
 
         # self.loss_fn = nn.MSELoss()
 
@@ -158,9 +160,11 @@ class TabPFN(Model):
         if self.train_inputs is not None and torch.is_tensor(self.train_inputs):
             self.train_inputs = (self.train_inputs,)
             
+        print(f'Full train X,Y shapes: {self.X_train.shape}, {self.y_train.shape}')
+        print(f'TabPFN training X,Y shapes: {self.X_train_tabpfn.shape}, {self.y_train_tabpfn.shape}')
         self.f_predictor = lambda q: self.tabpfn_model(train_x=self.X_train_tabpfn.unsqueeze(-2),
                                                        train_y=self.y_train_tabpfn.unsqueeze(-2),
-                                                       test_x=q.unsqueeze(-2),categorical_inds=None)
+                                                       test_x=q.to(self.device).unsqueeze(-2),categorical_inds=None)
 
     @property
     def batch_shape(self):
@@ -356,21 +360,21 @@ class TabPFN(Model):
         if any([use_variances is None, use_variances is False]):
             means, covs = self.get_prediction_with_uncertainty(X, get_cov=True, original_scale=False, **kwargs)
             try:
-                return MultivariateNormal(means, covs + 1e-6 * torch.eye(covs.shape[-1]))
+                return MultivariateNormal(means, covs + 1e-6 * torch.eye(covs.shape[-1],device=covs.device))
             except Exception as exc1:
                 print(exc1)
                 print("Trying with stronger regularization (1e-5)")
                 try:
-                    return MultivariateNormal(means, covs + 1e-5 * torch.eye(covs.shape[-1]))
+                    return MultivariateNormal(means, covs + 1e-5 * torch.eye(covs.shape[-1],device=covs.device))
                 except Exception as exc2:
                     print(exc2)
                     print("Trying with even stronger regularization (1e-4)")
                     try:
-                        return MultivariateNormal(means, covs + 1e-4 * torch.eye(covs.shape[-1]))
+                        return MultivariateNormal(means, covs + 1e-4 * torch.eye(covs.shape[-1],device=covs.device))
                     except Exception as exc3:
                         print(exc3)
                         print("Trying with yet stronger regularization (1e-3)")
-                        return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1]))
+                        return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1],device=covs.device))
 
         else:
             means, variances = self.get_prediction_with_uncertainty(X, get_cov=False, original_scale=False, **kwargs)
@@ -383,12 +387,32 @@ class TabPFN(Model):
                 mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6))
             else:
                 covar_diag = variances.squeeze(-1) + 1e-6
-                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1])
+                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1],device=covar_diag.device)
                 for i in range(covar_diag.shape[-1]):
                     covars[..., i, i] = covar_diag[..., i]
                 mvn = MultivariateNormal(means.squeeze(-1), covars)
 
             return mvn
+
+    def _batched_forward(self, q_flat: torch.Tensor):
+        """
+        Forward-pass `q_flat` through TabPFN in mini-batches so that the total
+        sequence length (train_x + test_x) never exceeds `_MAX_TOKENS_PER_FORWARD`.
+        Returns concatenated means and variances on the *same order* as q_flat.
+        """
+        n_ctx  = self.X_train_tabpfn.size(0)     # number of context (train) tokens
+        max_q  = _MAX_TOKENS_PER_FORWARD - n_ctx # max test tokens we can afford
+        assert max_q > 0, "context already exceeds token budget!"
+
+        means_chunks, vars_chunks = [], []
+        for start in range(0, q_flat.size(0), max_q):
+            q_chunk = q_flat[start:start + max_q]
+            # -- forward the chunk --
+            logits = self.f_predictor(q_chunk)                 # (n_chunk, …, buckets)
+            means_chunks.append(self.criterion.mean(logits))   # (n_chunk, 1)
+            vars_chunks.append(self.criterion.variance(logits))# (n_chunk, 1)
+
+        return torch.cat(means_chunks, 0), torch.cat(vars_chunks, 0)
 
     def get_prediction_with_uncertainty(
         self,
@@ -409,6 +433,7 @@ class TabPFN(Model):
             `get_cov=True`) tensor
         """
         orig_input_shape = q.shape
+        print(f'Querying TabPFN with tensor shape {orig_input_shape}')
         assert (
             q.shape[-1] == self.input_dim
         ), f"Expected tensor to have size=input_dim ({self.input_dim}) in last dimension, found tensor of shape {q.shape}"
@@ -447,7 +472,7 @@ class TabPFN(Model):
         #     train_y=self.y_train_nn.unsqueeze(-2),
         #     test_x=q_reshape.unsqueeze(-2),
         #     categorical_inds=None)
-        output_logits_bar_dist = self.f_predictor(q_reshape)        
+        # output_logits_bar_dist = self.f_predictor(q_reshape)        
         # val = []
         # for f_pred in self.f_predictor:
         #     f_pred.eval()
@@ -466,8 +491,15 @@ class TabPFN(Model):
         # else:
         #     all_preds = val
         
-        mu = self.criterion.mean(output_logits_bar_dist).reshape(*samples_shape,*self.batch_shape,self.output_dim).moveaxis(0,-2)
-        var = self.criterion.variance(output_logits_bar_dist).reshape(*samples_shape,*self.batch_shape,self.output_dim).moveaxis(0,-2)
+        # mu = self.criterion.mean(output_logits_bar_dist).reshape(*samples_shape,*self.batch_shape,self.output_dim).moveaxis(0,-2)
+        # var = self.criterion.variance(output_logits_bar_dist).reshape(*samples_shape,*self.batch_shape,self.output_dim).moveaxis(0,-2)
+        mu_flat, var_flat = self._batched_forward(q_reshape)
+
+        mu  = mu_flat.reshape(*samples_shape, *self.batch_shape, self.output_dim) \
+               .moveaxis(0, -2)
+        var = var_flat.reshape(*samples_shape, *self.batch_shape, self.output_dim) \
+                    .moveaxis(0, -2)
+
         assert (mu.shape[:-1] == input_shape[:-1]) and (var.shape[:-1] == input_shape[:-1]), "Something went wrong with reshaping."
         
         if original_scale:
