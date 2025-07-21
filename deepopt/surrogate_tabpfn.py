@@ -36,7 +36,7 @@ class TabPFN(Model):
     def __init__(
         self,
         # networks: List,
-        # config: ConfigSettings,
+        config: ConfigSettings,
         # optimizers: List,
         X_train: np.ndarray,
         y_train: np.ndarray,
@@ -66,14 +66,14 @@ class TabPFN(Model):
             download=True,
             check_bar_distribution_criterion=False,
             cache_trainset_representation=False,
-            # model_seed=np.random.randint(0,10000) if seed is None else seed
+            model_seed=np.random.randint(0,10000) if seed is None else seed
         )
         self.device = device
         self.tabpfn_model.to(self.device)
         self.criterion.to(self.device)
         self.tabpfn_model.eval()
         # self.f_optimizer = optimizers
-        # self.config = config
+        self.config = config
         # self.device = networks[0].device  # might not work for multi-networks
         assert multi_fidelity is False, 'Multi-fidelity modeling not yet supported with TabPFN.'
         self.multi_fidelity = multi_fidelity
@@ -134,7 +134,7 @@ class TabPFN(Model):
         bins = torch.linspace(0, 1, steps=11, device=self.device)
         bin_pairs = torch.stack((bins[:-1],bins[1:]),axis=1)
         nonzero_bin_pairs = bin_pairs[hist>0]
-        bin_progression = np.linspace(1,2,len(nonzero_bin_pairs))
+        bin_progression = np.linspace(1,self.config.get_setting('max_weight'),len(nonzero_bin_pairs))
         # bin_progression = bin_progression*len(nonzero_bin_pairs)/bin_progression.sum()
         # n_pts_bin = int(max(1000,len(self.y_train_nn))/len(nonzero_bin_pairs))
         n_pts_bin = max(1000,len(self.y_train_nn))*bin_progression/bin_progression.sum()

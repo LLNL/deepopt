@@ -43,7 +43,7 @@ NNENSEMBLE_CONFIG = {"n_estimators": 100,
 
 GP_CONFIG = {}
 
-TABPFN_CONFIG = {}
+TABPFN_CONFIG = {"max_weight":1}
 
 class Defaults:
     """

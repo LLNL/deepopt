@@ -1031,6 +1031,7 @@ class TabPFNModel(DeepoptBaseModel):
         print("Loading TabPFN Surrogate.")
         
         model = TabPFN(
+            config=self.config_settings,
             X_train=self.full_train_X,
             y_train=self.full_train_Y,
             multi_fidelity=self.multi_fidelity,
@@ -1049,6 +1050,7 @@ class TabPFNModel(DeepoptBaseModel):
         :returns: A 'TabPFN' model.
         """
         model = TabPFN(
+            config=self.config_settings,
             X_train=self.full_train_X,
             y_train=self.full_train_Y,
             multi_fidelity=self.multi_fidelity,
