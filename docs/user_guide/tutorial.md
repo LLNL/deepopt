@@ -120,16 +120,20 @@ python -c "import numpy as np; print(np.load('suggested_inputs.npy'))"
 ```
 
 ### Changing the neural network configuration
-Simply create a configuration yaml file with the desired entries (available settings described [here](configuration.md)). Then train and optimize the model as above, while specifying the configuration file:
+Simply create a configuration yaml file with the desired entries (available settings described [here](configuration.md)). Then load the config file when calling `ConfigSettings`:
+
+```py title="run_deepopt.py" linenums="8"
+cs = ConfigSettings(model_type=model_type,config_file='config.yaml')
+```
+
+The "learn" and "optimize" steps are then the same in the API call, while for CLI we specify the configuration file:
 
 === "DeepOpt API"
     ```py title="run_deepopt.py" linenums="11"
-    model.learn(outfile=f'learner_{model_type}.ckpt',
-                config_file='config.yaml') #(1)
+    model.learn(outfile=f'learner_{model_type}.ckpt') #(1)
 
     model.optimize(outfile='suggested_inputs.npy',
                    learner_file=f'learner_{model_type}.ckpt',
-                   config_file='config.yaml',
                    acq_method='EI') #(2)    
     ```
 
