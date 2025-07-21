@@ -228,7 +228,7 @@ class DeepoptBaseModel(ABC):
         :returns: A n x d tensor of samples where d is the dimension of the samples
         """
         mean = torch.zeros_like(std_devs)
-        cov = torch.diag(std_devs)
+        cov = torch.diag(std_devs**2)
         engine = MultivariateNormalQMCEngine(mean, cov, seed=self.random_seed)
         samples = engine.draw(n)
         return samples
