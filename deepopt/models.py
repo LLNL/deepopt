@@ -648,7 +648,7 @@ class DeepoptBaseModel(ABC):
             propose_best=propose_best,
         )
         if self.multi_fidelity:
-            candidates[:, :-1] = candidates[:, :-1] * (self.bounds[1, :-1] - self.bounds[0, :-1] + self.bounds[0, :-1])
+            candidates[:, :-1] = candidates[:, :-1] * (self.bounds[1, :-1] - self.bounds[0, :-1]) + self.bounds[0, :-1]
             candidates[:, -1] = candidates[:, -1].round()
         else:
             candidates = candidates * (self.bounds[1] - self.bounds[0]) + self.bounds[0]
