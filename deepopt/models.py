@@ -44,6 +44,7 @@ from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
 from deepopt.deltaenc import DeltaEnc
 from deepopt.nn_ensemble import NNEnsemble
+from deepopt.surrogate_tabpfn import TabPFN
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
@@ -126,6 +127,7 @@ class DeepoptBaseModel(ABC):
     target_fidelities: Dict[int, float] = None
 
     def __post_init__(self) -> None:
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
         input_data = np.load(self.data_file)
         self.X_orig = torch.from_numpy(input_data["X"]).float()
         self.Y_orig = torch.from_numpy(input_data["y"]).float()
@@ -145,7 +147,7 @@ class DeepoptBaseModel(ABC):
         self.output_dim = self.full_train_Y.shape[-1]
         assert self.output_dim == 1, "Multi-output models not currently supported."
         self.target_fidelities = {self.input_dim - 1: self.num_fidelities - 1}
-
+        
         # TODO: when running single fidelity with deluq, should n_epochs be set to 1000?
         torch.manual_seed(self.random_seed)
         np.random.seed(self.random_seed)
@@ -321,7 +323,7 @@ class DeepoptBaseModel(ABC):
 
         if acq_method in ("GIBBON", "MaxValEntropy"):
             n_candidates = 2000 * self.num_fidelities
-            candidate_set = torch.rand(n_candidates, self.input_dim)
+            candidate_set = torch.rand(n_candidates, self.input_dim, device=self.device)
             candidate_set[:, -1] *= self.num_fidelities - 1
             candidate_set[:, -1] = candidate_set[:, -1].round()
             if acq_method == "MaxValEntropy":
@@ -433,7 +435,7 @@ class DeepoptBaseModel(ABC):
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
         """
-        bounds = torch.FloatTensor(self.input_dim * [[0, 1]]).T
+        bounds = torch.tensor(self.input_dim * [[0, 1]], dtype=torch.float32, device=self.device).T
 
         if propose_best:
             best_candidate, max_pmean = optimize_acqf(
@@ -460,11 +462,13 @@ class DeepoptBaseModel(ABC):
                 max_y = self.full_train_Y.max().item()
             q_acq = qExpectedImprovement(model, max_y, objective=risk_objective)
         elif acq_method == "NEI":
-            q_acq = qNoisyExpectedImprovement(model, self.full_train_X, objective=risk_objective, prune_baseline=True)
+            q_acq = qNoisyExpectedImprovement(
+                model, self.full_train_X.to(self.device),objective=risk_objective, prune_baseline=True,
+            )
             # TODO: Verify call syntax for qNoisyExpectedImprovement (why does it need inputs?)
         elif acq_method == "MaxValEntropy":
             n_candidates = 1000
-            candidate_set = torch.rand(n_candidates, self.input_dim)
+            candidate_set = torch.rand(n_candidates, self.input_dim, device=self.device)
             q_acq = qMaxValueEntropy(
                 model,
                 posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
@@ -651,7 +655,18 @@ class DeepoptBaseModel(ABC):
             candidates[:, :-1] = candidates[:, :-1] * (self.bounds[1, :-1] - self.bounds[0, :-1]) + self.bounds[0, :-1]
             candidates[:, -1] = candidates[:, -1].round()
         else:
-            candidates = candidates * (self.bounds[1] - self.bounds[0]) + self.bounds[0]
+            def _bounds_to_device(bounds, device):
+                """Return bounds as a float32 Tensor on the requested device."""
+                if isinstance(bounds, torch.Tensor):
+                    return bounds.to(device=device, dtype=torch.float32)
+                # assume numpy array / list-like
+                return torch.as_tensor(bounds, dtype=torch.float32, device=device)
+
+            bounds_t = _bounds_to_device(self.bounds, candidates.device)
+
+            scale = bounds_t[1] - bounds_t[0]      
+            shift = bounds_t[0]                    
+            candidates = candidates * scale + shift
         candidates_npy = candidates.cpu().detach().numpy()
         np.save(outfile, candidates_npy)
 
@@ -1000,4 +1015,46 @@ class NNEnsembleModel(DeepoptBaseModel):
         # file_name = basename(learner_file).split(".")[0]
         dir_name = dirname(learner_file)
         model.load_ckpt(dir_name, file_name)
+        return model
+    
+class TabPFNModel(DeepoptBaseModel):
+    def train(self, outfile: str) -> Type[Model]:
+        """
+        There is no pre-training for a TabPFN surrogate, so this model will simply load the
+        pre-trained TabPFN transformer.
+
+        :param outfile: The name of the output file to save the model to (not implemented yet)
+
+        :returns: The `TabPFN` model
+        """
+
+        print("Loading TabPFN Surrogate.")
+        
+        model = TabPFN(
+            config=self.config_settings,
+            X_train=self.full_train_X,
+            y_train=self.full_train_Y,
+            multi_fidelity=self.multi_fidelity,
+            seed=self.random_seed,
+            device=self.device,
+        )
+
+        return model
+
+    def load_model(self, learner_file: str) -> Type[Model]:
+        """
+        Load in the TabPFN model (currently directly from website)
+
+        :param learner_file: The learner file that has the model we want to load (not implemented yet)
+
+        :returns: A 'TabPFN' model.
+        """
+        model = TabPFN(
+            config=self.config_settings,
+            X_train=self.full_train_X,
+            y_train=self.full_train_Y,
+            multi_fidelity=self.multi_fidelity,
+            seed=self.random_seed,
+            device=self.device,
+        )
         return model

@@ -4,7 +4,7 @@ neural networks.
 """
 import os
 import warnings
-from copy import copy,deepcopy
+from copy import deepcopy
 from typing import Any, Callable, Tuple, Type, Union, List
 
 import numpy as np
@@ -22,7 +22,7 @@ from deepopt.configuration import ConfigSettings
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class NNEnsemble(Model):
@@ -61,11 +61,11 @@ class NNEnsemble(Model):
         self.f_predictor = networks
         self.f_optimizer = optimizers
         self.config = config
-        self.device = networks[0].device  # might not work for multi-networks
+        self.device = device #networks[0].device  # might not work for multi-networks
         self.multi_fidelity = multi_fidelity
 
-        X_train = X_train.float()
-        y_train = y_train.float()
+        X_train = X_train.float().to(self.device)
+        y_train = y_train.float().to(self.device)
 
         self.X_train = X_train
         self.y_train = y_train
@@ -206,8 +206,9 @@ class NNEnsemble(Model):
         # data = TensorDataset(self.X_train_nn, self.y_train_nn)
         # loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
         # weights = self.y_train_nn.clone()**2 + 1e-6
-        hist,bins = torch.histogram(self.y_train_nn.mean(axis=1).detach(),10,range=(0,1))
-        weights = torch.zeros_like(self.y_train_nn,requires_grad=False)
+        hist = torch.histc(self.y_train_nn[:,0], bins=10, min=0, max=1)
+        bins = torch.linspace(0, 1, steps=11, device=self.device)
+        weights = torch.zeros_like(self.y_train_nn,requires_grad=False, device=self.device)
         weight_progression = torch.linspace(1,2,len(hist))
         for ind, n_bin in enumerate(hist):
             if ind==0:
@@ -313,21 +314,21 @@ class NNEnsemble(Model):
         if any([use_variances is None, use_variances is False]):
             means, covs = self.get_prediction_with_uncertainty(X, get_cov=True, original_scale=False, **kwargs)
             try:
-                return MultivariateNormal(means, covs + 1e-6 * torch.eye(covs.shape[-1]))
+                return MultivariateNormal(means, covs + 1e-6 * torch.eye(covs.shape[-1], device=means.device))
             except Exception as exc1:
                 print(exc1)
                 print("Trying with stronger regularization (1e-5)")
                 try:
-                    return MultivariateNormal(means, covs + 1e-5 * torch.eye(covs.shape[-1]))
+                    return MultivariateNormal(means, covs + 1e-5 * torch.eye(covs.shape[-1], device=means.device))
                 except Exception as exc2:
                     print(exc2)
                     print("Trying with even stronger regularization (1e-4)")
                     try:
-                        return MultivariateNormal(means, covs + 1e-4 * torch.eye(covs.shape[-1]))
+                        return MultivariateNormal(means, covs + 1e-4 * torch.eye(covs.shape[-1], device=means.device))
                     except Exception as exc3:
                         print(exc3)
                         print("Trying with yet stronger regularization (1e-3)")
-                        return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1]))
+                        return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1], device=means.device))
 
         else:
             means, variances = self.get_prediction_with_uncertainty(X, **kwargs)
@@ -337,13 +338,13 @@ class NNEnsemble(Model):
                     means_squeeze = torch.Tensor([means_squeeze])
                 if variances_squeeze.ndim == 0:
                     variances_squeeze = torch.Tensor([variances_squeeze])
-                mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6))
+                mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6, device=covar_diag.device))
             else:
                 covar_diag = variances.squeeze(-1) + 1e-6
-                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1])
+                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1], device=covar_diag.device)
                 for i in range(covar_diag.shape[-1]):
                     covars[..., i, i] = covar_diag[..., i]
-                mvn = MultivariateNormal(means.squeeze(-1), covars)
+                mvn = MultivariateNormal(means.squeeze(-1), covars, device=means.device)
 
             return mvn
 
