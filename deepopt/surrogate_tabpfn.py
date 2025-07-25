@@ -66,7 +66,7 @@ class TabPFN(Model):
             download=True,
             check_bar_distribution_criterion=False,
             cache_trainset_representation=False,
-            model_seed=np.random.randint(0,10000) if seed is None else seed
+            # model_seed=np.random.randint(0,10000) if seed is None else seed
         )
         self.device = device
         self.tabpfn_model.to(self.device)
@@ -160,8 +160,8 @@ class TabPFN(Model):
         if self.train_inputs is not None and torch.is_tensor(self.train_inputs):
             self.train_inputs = (self.train_inputs,)
             
-        print(f'Full train X,Y shapes: {self.X_train.shape}, {self.y_train.shape}')
-        print(f'TabPFN training X,Y shapes: {self.X_train_tabpfn.shape}, {self.y_train_tabpfn.shape}')
+        # print(f'Full train X,Y shapes: {self.X_train.shape}, {self.y_train.shape}')
+        # print(f'TabPFN training X,Y shapes: {self.X_train_tabpfn.shape}, {self.y_train_tabpfn.shape}')
         self.f_predictor = lambda q: self.tabpfn_model(train_x=self.X_train_tabpfn.unsqueeze(-2),
                                                        train_y=self.y_train_tabpfn.unsqueeze(-2),
                                                        test_x=q.to(self.device).unsqueeze(-2),categorical_inds=None)
@@ -381,9 +381,9 @@ class TabPFN(Model):
             if means.ndim in (1, 2):
                 means_squeeze, variances_squeeze = means.squeeze(), variances.squeeze()
                 if means_squeeze.ndim == 0:
-                    means_squeeze = torch.Tensor([means_squeeze])
+                    means_squeeze = means_squeeze.unsqueeze(0)
                 if variances_squeeze.ndim == 0:
-                    variances_squeeze = torch.Tensor([variances_squeeze])
+                    variances_squeeze = variances_squeeze.unsqueeze(0)
                 mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6))
             else:
                 covar_diag = variances.squeeze(-1) + 1e-6
@@ -433,7 +433,7 @@ class TabPFN(Model):
             `get_cov=True`) tensor
         """
         orig_input_shape = q.shape
-        print(f'Querying TabPFN with tensor shape {orig_input_shape}')
+        # print(f'Querying TabPFN with tensor shape {orig_input_shape}')
         assert (
             q.shape[-1] == self.input_dim
         ), f"Expected tensor to have size=input_dim ({self.input_dim}) in last dimension, found tensor of shape {q.shape}"
