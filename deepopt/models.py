@@ -323,7 +323,7 @@ class DeepoptBaseModel(ABC):
 
         if acq_method in ("GIBBON", "MaxValEntropy"):
             n_candidates = 2000 * self.num_fidelities
-            candidate_set = torch.rand(n_candidates, self.input_dim)
+            candidate_set = torch.rand(n_candidates, self.input_dim, device=self.device)
             candidate_set[:, -1] *= self.num_fidelities - 1
             candidate_set[:, -1] = candidate_set[:, -1].round()
             if acq_method == "MaxValEntropy":
@@ -463,12 +463,12 @@ class DeepoptBaseModel(ABC):
             q_acq = qExpectedImprovement(model, max_y, objective=risk_objective)
         elif acq_method == "NEI":
             q_acq = qNoisyExpectedImprovement(
-                model, self.full_train_X.to(self.device), objective=risk_objective, prune_baseline=True
+                model, self.full_train_X.to(self.device),objective=risk_objective, prune_baseline=True,
             )
             # TODO: Verify call syntax for qNoisyExpectedImprovement (why does it need inputs?)
         elif acq_method == "MaxValEntropy":
             n_candidates = 1000
-            candidate_set = torch.rand(n_candidates, self.input_dim)
+            candidate_set = torch.rand(n_candidates, self.input_dim, device=self.device)
             q_acq = qMaxValueEntropy(
                 model,
                 posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
