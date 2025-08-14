@@ -653,6 +653,8 @@ class DeepoptBaseModel(ABC):
         else:
             candidates = candidates * (self.bounds[1] - self.bounds[0]) + self.bounds[0]
         candidates_npy = candidates.cpu().detach().numpy()
+        if self.multi_fidelity:
+            candidates_npy = np.concatenate([candidates_npy[:,:-1].astype(float32),candidates_npy[:,-1:].astype(int),axis=1,dtype='object'])
         np.save(outfile, candidates_npy)
 
 
