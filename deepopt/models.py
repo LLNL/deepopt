@@ -44,6 +44,7 @@ from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
 from deepopt.deltaenc import DeltaEnc
 from deepopt.nn_ensemble import NNEnsemble
+from deepopt.surrogate_gp import GP
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
@@ -109,9 +110,9 @@ class DeepoptBaseModel(ABC):
         saved in a dict format since it's necessary for BoTorch. `Default: None`
     """
 
-    data_file: str
-    bounds: np.ndarray
-    config_settings: ConfigSettings
+    data_file: str = None
+    bounds: np.ndarray = None
+    config_settings: ConfigSettings = None
     random_seed: int = Defaults.random_seed
     multi_fidelity: bool = Defaults.multi_fidelity
     num_fidelities: int = None
@@ -126,30 +127,42 @@ class DeepoptBaseModel(ABC):
     target_fidelities: Dict[int, float] = None
 
     def __post_init__(self) -> None:
-        input_data = np.load(self.data_file)
-        self.X_orig = torch.from_numpy(input_data["X"]).float()
-        self.Y_orig = torch.from_numpy(input_data["y"]).float()
-        if len(self.Y_orig.shape) == 1:
-            self.Y_orig = self.Y_orig.reshape(-1, 1)
-        self.full_train_X = (self.X_orig - self.bounds[0]) / (self.bounds[1] - self.bounds[0])  # both models
-        if self.multi_fidelity:
-            self.full_train_X[:, -1] = self.X_orig[:, -1].round()
-            self.num_fidelities = int(self.bounds[1, -1]) + 1
-        else:
-            self.num_fidelities = 1
+        if self.data_file is not None:
+            input_data = np.load(self.data_file)
+            self.X_orig = torch.from_numpy(input_data["X"]).float()
+            self.Y_orig = torch.from_numpy(input_data["y"]).float()
+            if len(self.Y_orig.shape) == 1:
+                self.Y_orig = self.Y_orig.reshape(-1, 1)
+            # self.full_train_X = (self.X_orig - self.bounds[0]) / (self.bounds[1] - self.bounds[0])  # both models
+            self.full_train_X = self.X_orig.clone().to(self.device)
+            self.full_train_Y = self.Y_orig.clone().to(self.device)
+            if self.bounds is None:
+                self.bounds = torch.stack([self.full_train_X.min(axis=0),self.full_train_X.max(axis=0)],axis=0)
+            if self.multi_fidelity:
+                self.full_train_X[:, -1] = self.X_orig[:, -1].round()
+                self.num_fidelities = int(self.bounds[1, -1]) + 1
+            else:
+                self.num_fidelities = 1
 
-        self.full_train_X = self.full_train_X.to(self.device)
-        self.full_train_Y = self.Y_orig.clone().to(self.device)
-
-        self.input_dim = self.full_train_X.size(-1)
-        self.output_dim = self.full_train_Y.shape[-1]
-        assert self.output_dim == 1, "Multi-output models not currently supported."
-        self.target_fidelities = {self.input_dim - 1: self.num_fidelities - 1}
+            self.input_dim = self.full_train_X.shape[-1]
+            self.output_dim = self.full_train_Y.shape[-1]
+            assert self.output_dim == 1, "Multi-output models not currently supported."
+            self.target_fidelities = {self.input_dim - 1: self.num_fidelities - 1}
 
         # TODO: when running single fidelity with deluq, should n_epochs be set to 1000?
         torch.manual_seed(self.random_seed)
         np.random.seed(self.random_seed)
         random.seed(self.random_seed)
+        
+    # def __init_subclass__(cls):
+    #     if cls.config_settings is None:
+    #         if isinstance(cls,GPModel):
+    #             model_type = 'GP'
+    #         elif isinstance(cls,NNEnsembleModel):
+    #             model_type = 'nnEnsemble'
+    #         elif isinstance(cls,DelUQModel):
+    #             model_type = 'delUQ'
+    #         cls.config_settings = ConfigSettings(model_type=model_type)
 
     @abstractmethod
     def train(self, outfile: str) -> Type[Model]:
@@ -663,6 +676,11 @@ class GPModel(DeepoptBaseModel):
 
     This class has the same class variables as `DeepoptBaseModel`.
     """
+    
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs)
+        if self.config_settings is None:
+            self.config_settings = ConfigSettings(model_type='GP')
 
     def train(self, outfile: str) -> Union[SingleTaskGP, SingleTaskMultiFidelityGP]:
         """
@@ -676,24 +694,44 @@ class GPModel(DeepoptBaseModel):
         """
 
         print("Training GP Surrogate.")
-        model: Union[SingleTaskGP, SingleTaskMultiFidelityGP] = None
-        mll: ExactMarginalLogLikelihood = None
+        # model: Union[SingleTaskGP, SingleTaskMultiFidelityGP] = None
+        # mll: ExactMarginalLogLikelihood = None
 
-        if self.multi_fidelity:
-            model = SingleTaskMultiFidelityGP(
-                self.full_train_X,
-                self.full_train_Y,
-                outcome_transform=Standardize(m=1),
-                data_fidelity=self.input_dim - 1,
-            )
-            mll = ExactMarginalLogLikelihood(model.likelihood, model)
-        else:
-            model = SingleTaskGP(self.full_train_X, self.full_train_Y, outcome_transform=Standardize(m=1))
-            mll = ExactMarginalLogLikelihood(model.likelihood, model)
+        # if self.multi_fidelity:
+        #     model = SingleTaskMultiFidelityGP(
+        #         self.full_train_X,
+        #         self.full_train_Y,
+        #         outcome_transform=Standardize(m=1),
+        #         data_fidelity=self.input_dim - 1,
+        #     )
+        #     mll = ExactMarginalLogLikelihood(model.likelihood, model)
+        # else:
+        #     model = SingleTaskGP(self.full_train_X, self.full_train_Y, outcome_transform=Standardize(m=1))
+        #     mll = ExactMarginalLogLikelihood(model.likelihood, model)
 
-        fit_gpytorch_model(mll)
+        # fit_gpytorch_model(mll)
+        
+        # if self.multi_fidelity:
+        #     model = GP_mf(X_train=self.full_train_X,
+        #            y_train=self.full_train_Y,
+        #            bounds=self.bounds)
+        # else:
+        #     model = GP_sf(X_train=self.full_train_X,
+        #             y_train=self.full_train_Y,
+        #             bounds=self.bounds)
+        model_obj = GP(X_train=self.full_train_X,
+                       y_train=self.full_train_Y,
+                       bounds=self.bounds,
+                       multi_fidelity=self.multi_fidelity)
+        model_obj.fit()
+        
+        model = model_obj.gp
 
-        state = {"state_dict": model.state_dict()}
+        state = {"state_dict": model.state_dict(),
+                 "X_train":self.full_train_X,
+                 "y_train":self.full_train_Y,
+                 "bounds": self.bounds,
+                 "multi_fidelity":self.multi_fidelity}
         torch.save(state, join(getcwd(), dirname(outfile), basename(outfile)))
         return model
 
@@ -707,23 +745,43 @@ class GPModel(DeepoptBaseModel):
             depending on if we're doing a single-fidelity run or a multi-fidelity run
         """
 
-        model: Union[SingleTaskGP, SingleTaskMultiFidelityGP] = None
+        # model: Union[SingleTaskGP, SingleTaskMultiFidelityGP] = None
 
-        if self.multi_fidelity:
-            model = SingleTaskMultiFidelityGP(
-                self.full_train_X,
-                self.full_train_Y,
-                outcome_transform=Standardize(m=1),
-                data_fidelity=self.input_dim - 1,
-            )
-        else:
-            model = SingleTaskGP(
-                self.full_train_X,
-                self.full_train_Y,
-                outcome_transform=Standardize(m=1),
-            )
-        state_dict = torch.load(learner_file)
-        model.load_state_dict(state_dict["state_dict"])
+        # if self.multi_fidelity:
+        #     model = SingleTaskMultiFidelityGP(
+        #         self.full_train_X,
+        #         self.full_train_Y,
+        #         outcome_transform=Standardize(m=1),
+        #         data_fidelity=self.input_dim - 1,
+        #     )
+        # else:
+        #     model = SingleTaskGP(
+        #         self.full_train_X,
+        #         self.full_train_Y,
+        #         outcome_transform=Standardize(m=1),
+        #     )
+        state = torch.load(learner_file)
+        X_train = state.get('X_train',self.full_train_X)
+        y_train = state.get('y_train',self.full_train_Y)
+        bounds = state.get('bounds',self.bounds)
+        multi_fidelity = state.get('multi_fidelity',self.multi_fidelity)
+        
+        # if self.multi_fidelity:
+        #     model = GP_mf(X_train=X_train,
+        #            y_train=y_train,
+        #            bounds=bounds)
+        # else:
+        #     model = GP_sf(X_train=X_train,
+        #             y_train=y_train,
+        #             bounds=bounds)
+        
+        model_obj = GP(X_train=X_train,
+                       y_train=y_train,
+                       bounds=bounds,
+                       multi_fidelity=multi_fidelity)
+        model = model_obj.gp
+            
+        model.load_state_dict(state["state_dict"])
         return model
 
 
@@ -734,7 +792,12 @@ class DelUQModel(DeepoptBaseModel):
 
     This class has the same class variables as `DeepoptBaseModel`.
     """
-
+    
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs)
+        if self.config_settings is None:
+            self.config_settings = ConfigSettings(model_type='delUQ')
+    
     def _deluq_experiment(self, ray_config: Dict[str, Any]) -> Dict[str, Any]:
         """
         Training experiment used by ray tuning.
@@ -924,6 +987,11 @@ class DelUQModel(DeepoptBaseModel):
         return model
 
 class NNEnsembleModel(DeepoptBaseModel):
+    def __init__(self,**kwargs):
+        super().__init__(**kwargs)
+        if self.config_settings is None:
+            self.config_settings = ConfigSettings(model_type='nnEnsemble')
+    
     def train(self, outfile: str) -> Type[Model]:
         """
         Train the NN Ensemble surrogate and save the model produced. 
