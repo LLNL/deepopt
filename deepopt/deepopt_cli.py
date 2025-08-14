@@ -362,9 +362,21 @@ def learn(
 @click.option(
     "--propose-best",
     help="Select first candidate using surrogate optimum.",
+    is_flag=True,
     type=click.BOOL,
     default=False,
     show_default=True,
+)
+@click.option(
+    "--integer-fidelities",
+    help="Convert fidelity column to integers when saving.",
+    is_flag=True,
+    type=click.BOOL,
+    default=False,
+    show_default=True,
+    cls=ConditionalOption,
+    depends_on="multi_fidelity",
+    equal_to=True,
 )
 def optimize(
     infile,
@@ -384,6 +396,7 @@ def optimize(
     x_stddev,
     n_fantasies,
     propose_best,
+    integer_fidelities,
 ) -> None:
     """
     Load in the model created by `learn` and use it to propose new simulation points.
@@ -419,6 +432,7 @@ def optimize(
         x_stddev=x_stddev,
         n_fantasies=n_fantasies,
         propose_best=propose_best,
+        integer_fidelities=integer_fidelities,
     )
 
 
