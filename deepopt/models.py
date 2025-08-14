@@ -126,9 +126,14 @@ class DeepoptBaseModel(ABC):
     target_fidelities: Dict[int, float] = None
 
     def __post_init__(self) -> None:
-        input_data = np.load(self.data_file)
-        self.X_orig = torch.from_numpy(input_data["X"]).float()
-        self.Y_orig = torch.from_numpy(input_data["y"]).float()
+        try:
+            input_data = np.load(self.data_file)
+            self.X_orig = torch.from_numpy(input_data["X"]).float()
+            self.Y_orig = torch.from_numpy(input_data["y"]).float()
+        except ValueError:
+            input_data = np.load(self.data_file,allow_pickle=True)
+            self.X_orig = torch.from_numpy(input_data["X"].astype(np.float32))
+            self.Y_orig = torch.from_numpy(input_data["y"].astype(np.float32))
         if len(self.Y_orig.shape) == 1:
             self.Y_orig = self.Y_orig.reshape(-1, 1)
         self.full_train_X = (self.X_orig - self.bounds[0]) / (self.bounds[1] - self.bounds[0])  # both models
@@ -581,6 +586,7 @@ class DeepoptBaseModel(ABC):
         x_stddev: str = None,
         n_fantasies: int = Defaults.n_fantasies,
         propose_best: bool = False,
+        integer_fidelities: bool = False
     ) -> None:
         """
         The function to process the `deepopt optimize` command.
@@ -603,7 +609,9 @@ class DeepoptBaseModel(ABC):
             the model (at the expense of model complexity and performance).
         :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
             while the rest are acquired by the specified acquisition method. If `False`, acquire all points
-            with the acquisition method as usual.            
+            with the acquisition method as usual. 
+        :param integer_fidelities: If `True`, converts fidelity column to integers when saving candidate .npy file.
+            Saved numpy array had dtype 'object' and requires `allow_pickle=True` option in `np.load` to read.
         """
         print(
             f"""
@@ -653,6 +661,8 @@ class DeepoptBaseModel(ABC):
         else:
             candidates = candidates * (self.bounds[1] - self.bounds[0]) + self.bounds[0]
         candidates_npy = candidates.cpu().detach().numpy()
+        if integer_fidelities and self.multi_fidelity:
+            candidates_npy = np.concatenate([candidates_npy[:,:-1].astype(np.float32),candidates_npy[:,-1:].astype(int)],axis=1,dtype='object')
         np.save(outfile, candidates_npy)
 
 
