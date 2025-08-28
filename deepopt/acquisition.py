@@ -50,10 +50,10 @@ from botorch.exceptions.errors import UnsupportedError
 from botorch.models.cost import AffineFidelityCostModel
 from botorch.models.model import Model
 from botorch.models.utils import check_no_nans
-from botorch.sampling.samplers import SobolQMCNormalSampler
+from botorch.sampling.normal import SobolQMCNormalSampler
 from botorch.utils.transforms import match_batch_shape, t_batch_mode_transform
-from gpytorch.functions import inv_quad
-from gpytorch.utils.cholesky import psd_safe_cholesky
+from linear_operator.functions import inv_quad
+from linear_operator.utils.cholesky import psd_safe_cholesky
 from scipy.optimize import brentq
 from scipy.stats import norm
 from torch import Tensor
@@ -360,8 +360,8 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
             train_inputs=train_inputs,
         )
         self._init_model = model  # used for `fantasize()` when setting `X_pending`
-        self.sampler = SobolQMCNormalSampler(num_y_samples, seed=kwargs.get("seed"))
-        self.fantasies_sampler = SobolQMCNormalSampler(num_fantasies, seed=kwargs.get("seed"))
+        self.sampler = SobolQMCNormalSampler(torch.Size([num_y_samples]), seed=kwargs.get("seed"))
+        self.fantasies_sampler = SobolQMCNormalSampler(torch.Size([num_fantasies]), seed=kwargs.get("seed"))
         self.num_fantasies = num_fantasies
         self.set_X_pending(X_pending)  # this did not happen in the super constructor
 
@@ -419,7 +419,7 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
         # batch_shape x num_fantasies x (m) x (1 + num_trace_observations)
         mean_m = self.weight * posterior_m.mean.squeeze(-1)
         # batch_shape x num_fantasies x (m) x (1 + num_trace_observations)
-        variance_m = posterior_m.mvn.covariance_matrix
+        variance_m = posterior_m.distribution.covariance_matrix
         check_no_nans(variance_m)
 
         # compute mean and std for fM|ym, x, Dt ~ N(u, s^2)
@@ -471,11 +471,11 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
         # s_M x 1 x batch_shape x num_fantasies x (m)
 
         # Compute log(p(ym | x, Dt))
-        log_pdf_fm = posterior_m.mvn.log_prob(self.weight * samples_m).unsqueeze(0)
+        log_pdf_fm = posterior_m.distribution.log_prob(self.weight * samples_m).unsqueeze(0)
         # 1 x s_m x batch_shape x num_fantasies x (m)
 
         # H0 = H(ym | x, Dt)
-        H0 = posterior_m.mvn.entropy()  # batch_shape x num_fantasies x (m)
+        H0 = posterior_m.distribution.entropy()  # batch_shape x num_fantasies x (m)
 
         # regression adjusted H1 estimation, H1_hat = H1_bar - beta * (H0_bar - H0)
         # H1 = E_{f*|x, Dt}[H(ym|f*, x, Dt)]
@@ -619,7 +619,7 @@ class qLowerBoundMaxValueEntropy(DiscreteMaxValueBase):
             self.X_pending,
             observation_noise=True,
             posterior_transform=self.posterior_transform,
-        ).mvn.covariance_matrix.unsqueeze(0)
+        ).distribution.covariance_matrix.unsqueeze(0)
         # 1 x m x m
 
         # use determinant of block matrix formula
@@ -777,7 +777,7 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
         mean_M = self.weight * posterior.mean[..., -1, 0]  # batch_shape x num_fantasies
         variance_M = posterior.variance[..., -1, 0].clamp_min(CLAMP_LB)
         # get the covariance between the low fidelities and max fidelity
-        covar_mM = posterior.mvn.covariance_matrix[..., :-1, -1]
+        covar_mM = posterior.distribution.covariance_matrix[..., :-1, -1]
         # batch_shape x num_fantasies x (1 + num_trace_observations)
 
         check_no_nans(mean_M)

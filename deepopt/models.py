@@ -16,8 +16,11 @@ import numpy as np
 import psutil
 import ray
 import torch
-from botorch import fit_gpytorch_model
-from botorch.acquisition import PosteriorMean, qExpectedImprovement, qNoisyExpectedImprovement
+from botorch.fit import fit_gpytorch_mll
+from botorch.acquisition import PosteriorMean
+from botorch.acquisition.max_value_entropy_search import qMaxValueEntropy, qMultiFidelityMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy
+from botorch.acquisition.monte_carlo import qNoisyExpectedImprovement, qExpectedImprovement
+from botorch.acquisition.logei import qLogNoisyExpectedImprovement, qLogExpectedImprovement
 from botorch.acquisition.cost_aware import InverseCostWeightedUtility
 from botorch.acquisition.fixed_feature import FixedFeatureAcquisitionFunction
 from botorch.acquisition.utils import project_to_target_fidelity
@@ -25,13 +28,15 @@ from botorch.acquisition.knowledge_gradient import qKnowledgeGradient, qMultiFid
 from botorch.acquisition.objective import ExpectationPosteriorTransform
 from botorch.acquisition.risk_measures import CVaR, RiskMeasureMCObjective, VaR
 from botorch.models.deterministic import DeterministicModel
-from botorch.models.gp_regression_fidelity import SingleTaskGP, SingleTaskMultiFidelityGP
+from botorch.models.gp_regression import SingleTaskGP
+from botorch.models.gp_regression_fidelity import SingleTaskMultiFidelityGP
 from botorch.models.model import Model
 from botorch.models.transforms.input import InputPerturbation
 from botorch.models.transforms.outcome import Standardize
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_mixed
 from botorch.sampling.qmc import MultivariateNormalQMCEngine
-from botorch.sampling.samplers import SobolQMCNormalSampler
+from botorch.sampling.normal import SobolQMCNormalSampler
+from botorch.models.gpytorch import GPyTorchModel
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
 from ray import tune
 from ray.air.config import RunConfig
@@ -39,7 +44,7 @@ from ray.tune.schedulers import ASHAScheduler
 from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
-from deepopt.acquisition import qMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy, qMultiFidelityMaxValueEntropy
+# from deepopt.acquisition import qMaxValueEntropy, qMultiFidelityLowerBoundMaxValueEntropy, qMultiFidelityMaxValueEntropy
 from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
 from deepopt.deltaenc import DeltaEnc
@@ -61,7 +66,7 @@ class FidelityCostModel(DeterministicModel):
         """
         super().__init__()
         self._num_outputs = 1
-        self.fidelity_weights = torch.Tensor(fidelity_weights)
+        self.fidelity_weights = torch.Tensor(fidelity_weights, dtype=torch.double)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
@@ -128,12 +133,12 @@ class DeepoptBaseModel(ABC):
     def __post_init__(self) -> None:
         try:
             input_data = np.load(self.data_file)
-            self.X_orig = torch.from_numpy(input_data["X"]).float()
-            self.Y_orig = torch.from_numpy(input_data["y"]).float()
+            self.X_orig = torch.from_numpy(input_data["X"]).double()
+            self.Y_orig = torch.from_numpy(input_data["y"]).double()
         except ValueError:
             input_data = np.load(self.data_file,allow_pickle=True)
-            self.X_orig = torch.from_numpy(input_data["X"].astype(np.float32))
-            self.Y_orig = torch.from_numpy(input_data["y"].astype(np.float32))
+            self.X_orig = torch.from_numpy(input_data["X"].astype(np.float64))
+            self.Y_orig = torch.from_numpy(input_data["y"].astype(np.float64))
         if len(self.Y_orig.shape) == 1:
             self.Y_orig = self.Y_orig.reshape(-1, 1)
         self.full_train_X = (self.X_orig - self.bounds[0]) / (self.bounds[1] - self.bounds[0])  # both models
@@ -291,7 +296,7 @@ class DeepoptBaseModel(ABC):
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
         """
-        bounds = torch.FloatTensor(self.input_dim * [[0, 1]]).T
+        bounds = torch.FloatTensor(self.input_dim * [[0, 1]], dtype=torch.double).T
         bounds[1, -1] = self.num_fidelities - 1
 
         cost_model = FidelityCostModel(fidelity_weights=fidelity_cost)
@@ -314,7 +319,7 @@ class DeepoptBaseModel(ABC):
                 q=1,
                 num_restarts=Defaults.num_restarts_high,
                 raw_samples=Defaults.raw_samples_high,
-                options={"batch_limit": 10, "maxiter": 200, "seed": self.random_seed},
+                options={"batch_limit": 10, "maxiter": 200},
             )
             q-=1
             if q==0:
@@ -326,27 +331,25 @@ class DeepoptBaseModel(ABC):
 
         if acq_method in ("GIBBON", "MaxValEntropy"):
             n_candidates = 2000 * self.num_fidelities
-            candidate_set = torch.rand(n_candidates, self.input_dim)
+            candidate_set = torch.rand(n_candidates, self.input_dim, dtype=torch.double)
             candidate_set[:, -1] *= self.num_fidelities - 1
             candidate_set[:, -1] = candidate_set[:, -1].round()
             if acq_method == "MaxValEntropy":
                 q_acq = qMultiFidelityMaxValueEntropy(
-                    model,
+                    model=model,
                     num_fantasies=n_fantasies,
                     cost_aware_utility=cost_aware_utility,
                     project=self._project,
                     candidate_set=candidate_set,
-                    seed=self.random_seed,
                 )
             else:
                 q_acq = qMultiFidelityLowerBoundMaxValueEntropy(
-                    model,
+                    model=model,
                     posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
                     num_fantasies=n_fantasies,
                     cost_aware_utility=cost_aware_utility,
                     project=self._project,
                     candidate_set=candidate_set,
-                    seed=self.random_seed,
                 )
             candidates, acq_value = optimize_acqf_mixed(
                 q_acq,
@@ -355,7 +358,6 @@ class DeepoptBaseModel(ABC):
                 q=q,
                 num_restarts=Defaults.num_restarts_high,
                 raw_samples=Defaults.raw_samples_high,
-                options={"seed": self.random_seed},
             )
         elif acq_method == "KG":
             if not propose_best:
@@ -375,15 +377,15 @@ class DeepoptBaseModel(ABC):
                     q=1,
                     num_restarts=Defaults.num_restarts_high,
                     raw_samples=Defaults.raw_samples_high,
-                    options={"batch_limit": 10, "maxiter": 200, "seed": self.random_seed},
+                    options={"batch_limit": 10, "maxiter": 200},
                 )
             
 
             mfkg_acqf = qMultiFidelityKnowledgeGradient(
                 model=model,
                 num_fantasies=n_fantasies,
-                sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
-                inner_sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
+                sampler=SobolQMCNormalSampler(torch.Size([n_fantasies]), seed=self.random_seed),
+                inner_sampler=SobolQMCNormalSampler(torch.Size([n_fantasies]), seed=self.random_seed),
                 current_value=max_pmean,
                 cost_aware_utility=cost_aware_utility,
                 project=self._project,
@@ -396,7 +398,7 @@ class DeepoptBaseModel(ABC):
                 q=q,
                 num_restarts=Defaults.num_restarts_low,
                 raw_samples=Defaults.raw_samples_low,
-                options={"batch_limit": 5, "maxiter": 200, "seed": self.random_seed},
+                options={"batch_limit": 10, "maxiter": 200},
             )
         if propose_best:
             best_candidate = torch.concat([best_candidate.reshape(1,-1),(self.num_fidelities-1)*torch.ones(1,1)],axis=1)
@@ -423,7 +425,7 @@ class DeepoptBaseModel(ABC):
 
         :param model: The model loaded in by `load_model`. This will be a `SingleTaskGP`
             model if we used GP to train the model or a `DeltaEnc` if we used delUQ.
-        :param acq_method: The acquisition method. Either 'EI', 'NEI', 'MaxValEntropy', or 'KG'
+        :param acq_method: The acquisition method. Either 'EI', 'LogEI', 'NEI', 'LogNEI', 'MaxValEntropy', or 'KG'
         :param q: The number of candidates provided by the user (or the default value assigned
             in Default)
         :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
@@ -464,18 +466,33 @@ class DeepoptBaseModel(ABC):
             else:
                 max_y = self.full_train_Y.max().item()
             q_acq = qExpectedImprovement(model, max_y, objective=risk_objective)
+        elif acq_method == "LogEI":
+            if hasattr(model, "out_scaler") and hasattr(model, "y_max") and hasattr(model, "y_min"):
+                max_y = model.out_scaler(self.full_train_Y.max(), model.y_min, model.y_max).item()
+            else:
+                max_y = self.full_train_Y.max().item()
+            q_acq = qLogExpectedImprovement(model=model, best_f=max_y, objective=risk_objective)    
         elif acq_method == "NEI":
-            q_acq = qNoisyExpectedImprovement(model, self.full_train_X, objective=risk_objective, prune_baseline=True)
+            use_cache_root = isinstance(model, GPyTorchModel)
+            q_acq = qNoisyExpectedImprovement(model, self.full_train_X, objective=risk_objective, prune_baseline=True, cache_root=use_cache_root)
             # TODO: Verify call syntax for qNoisyExpectedImprovement (why does it need inputs?)
+        elif acq_method == "LogNEI":
+            use_cache_root = isinstance(model, GPyTorchModel)
+            q_acq = qLogNoisyExpectedImprovement(
+                model=model,
+                X_baseline=self.full_train_X,
+                objective=risk_objective,
+                prune_baseline=True,
+                cache_root=use_cache_root
+            )
         elif acq_method == "MaxValEntropy":
             n_candidates = 1000
-            candidate_set = torch.rand(n_candidates, self.input_dim)
+            candidate_set = torch.rand(n_candidates, self.input_dim, dtype=torch.double)
             q_acq = qMaxValueEntropy(
-                model,
+                model=model,
                 posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
                 candidate_set=candidate_set,
                 num_fantasies=n_fantasies,
-                seed=self.random_seed,
             )
         elif acq_method == "KG":
             if not propose_best:
@@ -493,8 +510,8 @@ class DeepoptBaseModel(ABC):
             q_acq = qKnowledgeGradient(
                 model=model,
                 num_fantasies=n_fantasies,
-                sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
-                inner_sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
+                sampler=SobolQMCNormalSampler(torch.Size([n_fantasies]), seed=self.random_seed),
+                inner_sampler=SobolQMCNormalSampler(torch.Size([n_fantasies]), seed=self.random_seed),
                 current_value=max_pmean,
                 objective=risk_objective,
             )
@@ -505,7 +522,6 @@ class DeepoptBaseModel(ABC):
             num_restarts=Defaults.num_restarts_high,
             raw_samples=Defaults.raw_samples_low if acq_method in ["MaxValEntropy", "KG"] else Defaults.raw_samples_high,
             sequential=(acq_method == "MaxValEntropy"),
-            options={"seed": self.random_seed},
         )
         if propose_best:
             candidates = torch.concat([best_candidate.reshape(1,-1),candidates],axis=0)
@@ -579,7 +595,7 @@ class DeepoptBaseModel(ABC):
         learner_file: str,
         acq_method: str,
         num_candidates: int = Defaults.num_candidates,
-        fidelity_cost: np.ndarray = torch.FloatTensor(json.loads(Defaults.fidelity_cost)),
+        fidelity_cost: np.ndarray =  torch.tensor(json.loads(Defaults.fidelity_cost), dtype=torch.double),
         risk_measure: str = None,
         risk_level: float = None,
         risk_n_deltas: int = None,
@@ -631,8 +647,8 @@ class DeepoptBaseModel(ABC):
 
         if risk_measure:
             assert acq_method != "MaxValEntropy", "Risk measure not yet supported for MaxValueEntropy acquisition"
-            x_stddev_scaled = x_stddev / (self.bounds[1] - self.bounds[0])
-            bounds_scaled = torch.FloatTensor(self.input_dim * [[0, 1]]).T
+            x_stddev_scaled = torch.as_tensor(x_stddev, dtype=torch.double) / (self.bounds[1] - self.bounds[0])
+            bounds_scaled = torch.FloatTensor(self.input_dim * [[0, 1]], dtype=torch.double).T
             if self.multi_fidelity:
                 x_stddev_scaled[-1] = 0
             risk_objective = self.get_risk_measure_objective(risk_measure=risk_measure, alpha=risk_level, n_w=risk_n_deltas)
@@ -694,14 +710,14 @@ class GPModel(DeepoptBaseModel):
                 self.full_train_X,
                 self.full_train_Y,
                 outcome_transform=Standardize(m=1),
-                data_fidelity=self.input_dim - 1,
+                data_fidelities=[self.input_dim - 1]
             )
             mll = ExactMarginalLogLikelihood(model.likelihood, model)
         else:
             model = SingleTaskGP(self.full_train_X, self.full_train_Y, outcome_transform=Standardize(m=1))
             mll = ExactMarginalLogLikelihood(model.likelihood, model)
 
-        fit_gpytorch_model(mll)
+        fit_gpytorch_mll(mll)
 
         state = {"state_dict": model.state_dict()}
         torch.save(state, join(getcwd(), dirname(outfile), basename(outfile)))
@@ -724,7 +740,7 @@ class GPModel(DeepoptBaseModel):
                 self.full_train_X,
                 self.full_train_Y,
                 outcome_transform=Standardize(m=1),
-                data_fidelity=self.input_dim - 1,
+                data_fidelities=[self.input_dim - 1]
             )
         else:
             model = SingleTaskGP(

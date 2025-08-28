@@ -5,14 +5,15 @@ neural networks.
 import os
 import warnings
 from copy import copy
-from typing import Any, Callable, Tuple, Type, Union
+from typing import Any, Optional, Tuple, Type, Union
 
 import numpy as np
 import torch
 from botorch import settings
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
-from botorch.sampling.samplers import MCSampler
+from botorch.sampling.base import MCSampler
+from botorch.acquisition.objective import PosteriorTransform
 from gpytorch.distributions import MultivariateNormal
 from torch import nn
 from torch.optim import SGD, Adam
@@ -281,7 +282,7 @@ class DeltaEnc(Model):
     def posterior(
         self,
         X: torch.Tensor,
-        posterior_transform: Callable[[GPyTorchPosterior], GPyTorchPosterior] = None,
+        posterior_transform: Optional[PosteriorTransform] = None,
         # observation_noise: bool = False,
         **kwargs,
     ) -> GPyTorchPosterior:
@@ -316,40 +317,45 @@ class DeltaEnc(Model):
         :returns: A multivariate normal object computed using `X`
         """
         use_variances = kwargs.get("use_variances")
-        if any([use_variances is None, use_variances is False]):
+        if use_variances is None or use_variances is False:
             means, covs = self.get_prediction_with_uncertainty(X, get_cov=True, original_scale=False, **kwargs)
             try:
-                return MultivariateNormal(means, covs + 1e-6 * torch.eye(covs.shape[-1]))
+                eye = torch.eye(covs.shape[-1], device=covs.device, dtype=covs.dtype)
+                return MultivariateNormal(means, (covs + 1e-6 * eye).double())
             except Exception as exc1:
                 print(exc1)
                 print("Trying with stronger regularization (1e-5)")
                 try:
-                    return MultivariateNormal(means, covs + 1e-5 * torch.eye(covs.shape[-1]))
+                    eye = torch.eye(covs.shape[-1], device=covs.device, dtype=covs.dtype)
+                    return MultivariateNormal(means, (covs + 1e-5 * eye).double())
                 except Exception as exc2:
                     print(exc2)
                     print("Trying with even stronger regularization (1e-4)")
                     try:
-                        return MultivariateNormal(means, covs + 1e-4 * torch.eye(covs.shape[-1]))
+                        eye = torch.eye(covs.shape[-1], device=covs.device, dtype=covs.dtype)
+                        return MultivariateNormal(means, (covs + 1e-4 * eye).double())
                     except Exception as exc3:
                         print(exc3)
                         print("Trying with yet stronger regularization (1e-3)")
-                        return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1]))
+                        eye = torch.eye(covs.shape[-1], device=covs.device, dtype=covs.dtype)
+                        return MultivariateNormal(means, (covs + 1e-3 * eye).double())
 
         else:
             means, variances = self.get_prediction_with_uncertainty(X, **kwargs)
             if means.ndim in (1, 2):
                 means_squeeze, variances_squeeze = means.squeeze(), variances.squeeze()
                 if means_squeeze.ndim == 0:
-                    means_squeeze = torch.Tensor([means_squeeze])
+                    means_squeeze = torch.tensor([means_squeeze], device=means.device, dtype=means.dtype)
                 if variances_squeeze.ndim == 0:
-                    variances_squeeze = torch.Tensor([variances_squeeze])
-                mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6))
+                    variances_squeeze = torch.tensor([variances_squeeze], device=variances.device, dtype=variances.dtype)
+                mvn = MultivariateNormal(means_squeeze.double(), torch.diag(variances_squeeze + 1e-6).double())
             else:
                 covar_diag = variances.squeeze(-1) + 1e-6
-                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1])
+                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1],
+                                     device=covar_diag.device, dtype=covar_diag.dtype)
                 for i in range(covar_diag.shape[-1]):
                     covars[..., i, i] = covar_diag[..., i]
-                mvn = MultivariateNormal(means.squeeze(-1), covars)
+                mvn = MultivariateNormal(means.squeeze(-1).double(), covars.double())
 
             return mvn
 
@@ -454,7 +460,7 @@ class DeltaEnc(Model):
     def fantasize(
         self,
         X: torch.Tensor,
-        sampler: Type[MCSampler],
+        sampler: MCSampler,
         # observation_noise: bool = True,  # TODO uncomment this if we implement it
         **kwargs,
     ) -> "DeltaEnc":

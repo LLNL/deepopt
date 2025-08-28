@@ -5,14 +5,15 @@ neural networks.
 import os
 import warnings
 from copy import copy,deepcopy
-from typing import Any, Callable, Tuple, Type, Union, List
+from typing import Any, Optional, Tuple, Type, Union, List
 
 import numpy as np
 import torch
 from botorch import settings
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
-from botorch.sampling.samplers import MCSampler
+from botorch.sampling.base import MCSampler
+from botorch.acquisition.objective import PosteriorTransform
 from gpytorch.distributions import MultivariateNormal
 from torch import nn
 from torch.optim import SGD, Adam
@@ -63,6 +64,10 @@ class NNEnsemble(Model):
         self.config = config
         self.device = networks[0].device  # might not work for multi-networks
         self.multi_fidelity = multi_fidelity
+
+        first_dtype = next(self.f_predictor[0].parameters()).dtype
+        for net in self.f_predictor:
+            net.to(device=self.device, dtype=first_dtype)
 
         X_train = X_train.float()
         y_train = y_train.float()
@@ -233,14 +238,15 @@ class NNEnsemble(Model):
                 avg_loss = 0.0
 
                 for _, (xi, yi,w) in enumerate(loader):
-                    xi = xi.to(self.device)
-                    yi = yi.to(self.device)
-                    w = w.to(self.device)
+                    param_dtype = next(f_pred.parameters()).dtype
+                    xi = xi.to(self.device, dtype=param_dtype)
+                    yi = yi.to(self.device, dtype=param_dtype)
+                    w = w.to(self.device, dtype=param_dtype)
 
                     out_hat = f_pred(xi)
                     opt.zero_grad()
                     # f_loss = self.loss_fn(out_hat.float(), yi.float())
-                    f_loss = ((out_hat.float()-yi.float())**2*w).mean()
+                    f_loss = ((out_hat - yi)**2*w).mean()
                     f_loss.backward()
                     opt.step()
                     avg_loss += f_loss.item() / len(loader)
@@ -275,7 +281,7 @@ class NNEnsemble(Model):
     def posterior(
         self,
         X: torch.Tensor,
-        posterior_transform: Callable[[GPyTorchPosterior], GPyTorchPosterior] = None,
+        posterior_transform: Optional[PosteriorTransform] = None,
         # observation_noise: bool = False,
         **kwargs,
     ) -> GPyTorchPosterior:
@@ -310,40 +316,47 @@ class NNEnsemble(Model):
         :returns: A multivariate normal object computed using `X`
         """
         use_variances = kwargs.get("use_variances")
-        if any([use_variances is None, use_variances is False]):
+        if use_variances is None or use_variances is False:
             means, covs = self.get_prediction_with_uncertainty(X, get_cov=True, original_scale=False, **kwargs)
             try:
-                return MultivariateNormal(means, covs + 1e-6 * torch.eye(covs.shape[-1]))
+                eye = torch.eye(covs.shape[-1], device=covs.device, dtype=covs.dtype)
+                return MultivariateNormal(means.double(), (covs + 1e-6 * eye).double())
             except Exception as exc1:
                 print(exc1)
                 print("Trying with stronger regularization (1e-5)")
                 try:
-                    return MultivariateNormal(means, covs + 1e-5 * torch.eye(covs.shape[-1]))
+                    eye = torch.eye(covs.shape[-1], device=covs.device, dtype=covs.dtype)
+                    return MultivariateNormal(means.double(), (covs + 1e-5 * eye).double())
                 except Exception as exc2:
                     print(exc2)
                     print("Trying with even stronger regularization (1e-4)")
                     try:
-                        return MultivariateNormal(means, covs + 1e-4 * torch.eye(covs.shape[-1]))
+                        eye = torch.eye(covs.shape[-1], device=covs.device, dtype=covs.dtype)
+                        return MultivariateNormal(means.double(), (covs + 1e-4 * eye).double())
                     except Exception as exc3:
                         print(exc3)
                         print("Trying with yet stronger regularization (1e-3)")
-                        return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1]))
+                        eye = torch.eye(covs.shape[-1], device=covs.device, dtype=covs.dtype)
+                        return MultivariateNormal(means.double(), (covs + 1e-3 * eye).double())
 
         else:
             means, variances = self.get_prediction_with_uncertainty(X, **kwargs)
             if means.ndim in (1, 2):
                 means_squeeze, variances_squeeze = means.squeeze(), variances.squeeze()
                 if means_squeeze.ndim == 0:
-                    means_squeeze = torch.Tensor([means_squeeze])
+                    means_squeeze = torch.tensor([means_squeeze], device=means.device, dtype=means.dtype)
                 if variances_squeeze.ndim == 0:
-                    variances_squeeze = torch.Tensor([variances_squeeze])
-                mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6))
+                    variances_squeeze = torch.tensor([variances_squeeze], device=variances.device, dtype=variances.dtype)
+                mvn = MultivariateNormal(means_squeeze.double(), torch.diag(variances_squeeze + 1e-6).double())
             else:
                 covar_diag = variances.squeeze(-1) + 1e-6
-                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1])
+                covars = torch.zeros(
+                    *covar_diag.shape, covar_diag.shape[-1],
+                    device=covar_diag.device, dtype=covar_diag.dtype
+                )
                 for i in range(covar_diag.shape[-1]):
                     covars[..., i, i] = covar_diag[..., i]
-                mvn = MultivariateNormal(means.squeeze(-1), covars)
+                mvn = MultivariateNormal(means.squeeze(-1).double(), covars.double())
 
             return mvn
 
@@ -398,11 +411,12 @@ class NNEnsemble(Model):
 
         q_combine_samples = q_move.reshape(-1, *self.batch_shape, self.input_dim)
         q_reshape = q_combine_samples.reshape(q_combine_samples.shape[0], -1)
+        ens_dtype = next(self.f_predictor[0].parameters()).dtype
         val = []
         for f_pred in self.f_predictor:
             f_pred.eval()
-            val.append(f_pred(q_reshape.float()))
-        val = torch.stack(val)
+            val.append(f_pred(q_reshape.to(dtype=ens_dtype)))
+        val = torch.stack(val).to(dtype=ens_dtype)
         val = val.reshape(self.n_estimators, *samples_shape, *self.batch_shape, self.output_dim).moveaxis(1, -2)
         assert val.shape[1:-1] == input_shape[:-1], "Something went wrong with reshaping."
 
@@ -433,7 +447,7 @@ class NNEnsemble(Model):
     def fantasize(
         self,
         X: torch.Tensor,
-        sampler: Type[MCSampler],
+        sampler: MCSampler,
         # observation_noise: bool = True,  # TODO uncomment this if we implement it
         **kwargs,
     ) -> "NNEnsemble":
@@ -496,7 +510,7 @@ class NNEnsemble(Model):
         fantasy_dict = {'y_max':self.y_max,'y_min':self.y_min,'n_fantasy_training_pts':Y_fantasized.shape[-2]}
 
         with torch.enable_grad():
-            nets = [Arch(config=config_fantasy,unc_type="ensemble",input_dim=in_size,output_dim=out_size,device=self.device)
+            nets = [Arch(config=config_fantasy,unc_type="ensemble",input_dim=in_size,output_dim=out_size,device=self.device).float()
                     for _ in range(self.n_estimators)]
             opts = [create_optimizer(net,config_fantasy) for net in nets]
             fantasy_model = NNEnsemble(
