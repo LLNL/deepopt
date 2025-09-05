@@ -323,7 +323,7 @@ class DeepoptBaseModel(ABC):
 
         if acq_method in ("GIBBON", "MaxValEntropy"):
             n_candidates = 2000 * self.num_fidelities
-            candidate_set = torch.rand(n_candidates, self.input_dim, device=self.device)
+            candidate_set = torch.rand(n_candidates, self.input_dim, device=model.device)
             candidate_set[:, -1] *= self.num_fidelities - 1
             candidate_set[:, -1] = candidate_set[:, -1].round()
             if acq_method == "MaxValEntropy":
