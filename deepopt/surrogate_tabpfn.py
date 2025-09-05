@@ -12,11 +12,19 @@ import torch
 from botorch import settings
 from botorch.models.model import Model
 from botorch.posteriors.gpytorch import GPyTorchPosterior
-from botorch.sampling.samplers import MCSampler
+try:
+    # BoTorch >= 0.15
+    from botorch.sampling.base import MCSampler
+except Exception:  # pragma: no cover
+    # Older BoTorch fallback
+    from botorch.sampling.samplers import MCSampler
+from contextlib import nullcontext
+
 from gpytorch.distributions import MultivariateNormal
 from torch import nn
 from torch.optim import SGD, Adam
 from torch.utils.data import DataLoader, TensorDataset
+from torch.amp import autocast
 
 from deepopt.configuration import ConfigSettings
 from deepopt.surrogate_utils import MLP as Arch
@@ -24,8 +32,27 @@ from deepopt.surrogate_utils import create_optimizer
 
 from tabpfn.base import load_model_criterion_config
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
 _MAX_TOKENS_PER_FORWARD = 3000 
+
+def _call_tabpfn_forward(model, train_x, train_y, test_x, **extra):
+    """
+    Try calling TabPFN with keyword args; if unsupported, fall back to positional-only.
+    `extra` may include optional args like `num_samples` or `categorical_inds`.
+    """
+    try:
+        return model(train_x=train_x, train_y=train_y, test_x=test_x, **extra)
+    except TypeError as e:
+        # Installed TabPFN likely expects positional args
+        if "unexpected keyword argument" in str(e):
+            # If a 4th positional 'num_samples' is supported in your build, try it.
+            if "num_samples" in extra:
+                try:
+                    return model(train_x, train_y, test_x, extra["num_samples"])
+                except TypeError:
+                    pass
+            # Last resort: positional 3-arg call
+            return model(train_x, train_y, test_x)
+        raise
 
 class TabPFN(Model):
     """
@@ -162,9 +189,14 @@ class TabPFN(Model):
             
         # print(f'Full train X,Y shapes: {self.X_train.shape}, {self.y_train.shape}')
         # print(f'TabPFN training X,Y shapes: {self.X_train_tabpfn.shape}, {self.y_train_tabpfn.shape}')
-        self.f_predictor = lambda q: self.tabpfn_model(train_x=self.X_train_tabpfn.unsqueeze(-2),
-                                                       train_y=self.y_train_tabpfn.unsqueeze(-2),
-                                                       test_x=q.to(self.device).unsqueeze(-2),categorical_inds=None)
+        self.f_predictor = lambda q: _call_tabpfn_forward(
+            self.tabpfn_model,
+            self.X_train_tabpfn.unsqueeze(-2),
+            self.y_train_tabpfn.unsqueeze(-2),
+            q.to(device=self.device, dtype=self.X_train_tabpfn.dtype).unsqueeze(-2),
+            categorical_inds=None,  # passed if supported; ignored in positional fallback
+        )
+
 
     @property
     def batch_shape(self):
@@ -408,7 +440,10 @@ class TabPFN(Model):
         for start in range(0, q_flat.size(0), max_q):
             q_chunk = q_flat[start:start + max_q]
             # -- forward the chunk --
-            logits = self.f_predictor(q_chunk)                 # (n_chunk, …, buckets)
+            use_cuda = str(self.device).startswith("cuda")
+            amp_ctx = autocast(device_type='cuda', dtype=torch.bfloat16) if use_cuda else nullcontext()
+            with torch.set_grad_enabled(q_chunk.requires_grad), amp_ctx:
+                logits = self.f_predictor(q_chunk).float()                #
             means_chunks.append(self.criterion.mean(logits))   # (n_chunk, 1)
             vars_chunks.append(self.criterion.variance(logits))# (n_chunk, 1)
 
