@@ -9,6 +9,7 @@ from typing import Any, List, Mapping, Tuple, Union
 
 import click
 import torch
+import numpy as np
 from click.core import iter_params_for_processing
 
 from deepopt.configuration import ConfigSettings
@@ -35,7 +36,6 @@ def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel, NNEnsembleM
         raise ValueError(f"The model type {model_type} is not a valid DeepOpt model. Valid models are 'GP', 'delUQ', and 'nnEnsemble'.")
 
     return deepopt_model
-
 
 class DeepoptCommand(click.Command):
     """
@@ -197,6 +197,14 @@ def deepopt_cli():
     type=click.INT,
 )
 @click.option(
+    "-d",
+    "--device",
+    help="Device to use (cpu/gpu/auto)",
+    default="auto",
+    show_default=True,
+    type=click.Choice(["cpu","gpu","cuda","auto"])
+)
+@click.option(
     "--multi-fidelity",
     help="Single or multi-fidelity?",
     is_flag=True,
@@ -207,17 +215,18 @@ def deepopt_cli():
 def learn(
     infile,
     outfile,
-    config_file,
     bounds,
+    model_type,
+    config_file,
     random_seed,
     k_folds,
-    model_type,
+    device,
     multi_fidelity,
 ) -> None:
     """
     Train a model on a dataset and save that model to an output file.
     """
-    bounds = torch.FloatTensor(json.loads(bounds)).T
+    bounds = np.array(json.loads(bounds),dtype=np.float32).T
 
     config_settings = ConfigSettings(model_type, config_file=config_file)
 
@@ -230,6 +239,7 @@ def learn(
         random_seed=random_seed,
         bounds=bounds,
         k_folds=k_folds,
+        device=device,
     )
     model.learn(outfile=outfile)
 
@@ -309,6 +319,14 @@ def learn(
     show_default=True,
 )
 @click.option(
+    "-d",
+    "--device",
+    help="Device to use (cpu/gpu/auto)",
+    default="auto",
+    show_default=True,
+    type=click.Choice(["cpu","gpu","cuda","auto"])
+)
+@click.option(
     "--multi-fidelity",
     help="Single or multi-fidelity?",
     is_flag=True,
@@ -325,6 +343,15 @@ def learn(
     cls=ConditionalOption,
     depends_on="multi_fidelity",
     equal_to=True,
+)
+@click.option(
+    "-v",
+    "--verbose",
+    help="Print details of model evaluations and fantasy training.",
+    is_flag=True,
+    default=False,
+    show_default=True,
+    type=click.BOOL
 )
 @click.option(
     "--risk-measure",
@@ -388,8 +415,10 @@ def optimize(
     random_seed,
     model_type,
     num_candidates,
+    device,
     multi_fidelity,
     fidelity_cost,
+    verbose,
     risk_measure,
     risk_level,
     risk_n_deltas,
@@ -400,8 +429,8 @@ def optimize(
 ) -> None:
     """
     Load in the model created by `learn` and use it to propose new simulation points.
-    """
-    bounds = torch.FloatTensor(json.loads(bounds)).T
+    """    
+    bounds = np.array(json.loads(bounds),dtype=np.float32).T
 
     config_settings = ConfigSettings(model_type, config_file=config_file)
 
@@ -413,13 +442,17 @@ def optimize(
         multi_fidelity=multi_fidelity,
         random_seed=random_seed,
         bounds=bounds,
+        device=device,
+        verbose=verbose,
     )
 
     risk_measure = None if risk_measure == "None" else risk_measure
     if risk_measure:
-        x_stddev = torch.FloatTensor(json.loads(x_stddev))
+        # x_stddev = torch.tensor(json.loads(x_stddev),dtype=torch.float,device=device)
+        x_stddev = np.array(json.loads(x_stddev),dtype=np.float32)
     if multi_fidelity:
-        fidelity_cost = torch.FloatTensor(json.loads(fidelity_cost))
+        # fidelity_cost = torch.tensor(json.loads(fidelity_cost),dtype=torch.float,device=device)
+        fidelity_cost = np.array(json.loads(fidelity_cost),dtype=np.float32)
     model.optimize(
         outfile=outfile,
         learner_file=learner_file,

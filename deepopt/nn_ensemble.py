@@ -22,7 +22,7 @@ from deepopt.configuration import ConfigSettings
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# device = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 class NNEnsemble(Model):
@@ -41,6 +41,7 @@ class NNEnsemble(Model):
         y_train: np.ndarray,
         multi_fidelity: bool = False,
         fantasy_dict: dict = None,
+        verbose: bool = False,
     ):
         """
         Initialize an instance of the `NNEnsemble` model for further processing.
@@ -64,8 +65,8 @@ class NNEnsemble(Model):
         self.device = networks[0].device  # might not work for multi-networks
         self.multi_fidelity = multi_fidelity
 
-        X_train = X_train.float()
-        y_train = y_train.float()
+        X_train = X_train.float().to(self.device)
+        y_train = y_train.float().to(self.device)
 
         self.X_train = X_train
         self.y_train = y_train
@@ -118,6 +119,13 @@ class NNEnsemble(Model):
         self.train_inputs = self.X_train
         if self.train_inputs is not None and torch.is_tensor(self.train_inputs):
             self.train_inputs = (self.train_inputs,)
+            
+        if verbose:
+            self.vprint = lambda *args,**kwargs: print(*args,**kwargs)
+        else:
+            self.vprint = lambda *args, **kwargs: None
+            
+        self.verbose = verbose
 
     @property
     def batch_shape(self):
@@ -206,9 +214,9 @@ class NNEnsemble(Model):
         # data = TensorDataset(self.X_train_nn, self.y_train_nn)
         # loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
         # weights = self.y_train_nn.clone()**2 + 1e-6
-        hist,bins = torch.histogram(self.y_train_nn.mean(axis=1).detach(),10,range=(0,1))
-        weights = torch.zeros_like(self.y_train_nn,requires_grad=False)
-        weight_progression = torch.linspace(1,2,len(hist))
+        hist,bins = torch.histogram(self.y_train_nn.mean(axis=1).cpu().detach(),10,range=(0,1))
+        weights = torch.zeros_like(self.y_train_nn,requires_grad=False,device=self.device)
+        weight_progression = torch.linspace(1,2,len(hist),device=self.device)
         for ind, n_bin in enumerate(hist):
             if ind==0:
                 loc = self.y_train_nn.mean(axis=1)<=bins[1]
@@ -226,7 +234,11 @@ class NNEnsemble(Model):
             data = TensorDataset(self.X_train_nn[selection],self.y_train_nn[selection],weights[selection])
             loader = DataLoader(data, shuffle=True, batch_size=self.actual_batch_size)
             f_pred.train()
-            print(f"Training NN estimator {estimator_num+1}/{self.n_estimators}...")
+            str_to_print = f"Training NN estimator {estimator_num+1}/{self.n_estimators}..."
+            if self.is_fantasy_model:
+                self.vprint(str_to_print)
+            else:
+                print(str_to_print)
             for n_epoch in range(self.n_epochs):
                 if (n_epoch+1)%10==0 and not self.is_fantasy_model:
                     print(f"Epoch {n_epoch+1}/{self.n_epochs}",end="\r")
@@ -313,34 +325,34 @@ class NNEnsemble(Model):
         if any([use_variances is None, use_variances is False]):
             means, covs = self.get_prediction_with_uncertainty(X, get_cov=True, original_scale=False, **kwargs)
             try:
-                return MultivariateNormal(means, covs + 1e-6 * torch.eye(covs.shape[-1]))
+                return MultivariateNormal(means, covs + 1e-6 * torch.eye(covs.shape[-1],device=self.device))
             except Exception as exc1:
-                print(exc1)
-                print("Trying with stronger regularization (1e-5)")
+                self.vprint(exc1)
+                self.vprint("Trying with stronger regularization (1e-5)")
                 try:
-                    return MultivariateNormal(means, covs + 1e-5 * torch.eye(covs.shape[-1]))
+                    return MultivariateNormal(means, covs + 1e-5 * torch.eye(covs.shape[-1],device=self.device))
                 except Exception as exc2:
-                    print(exc2)
-                    print("Trying with even stronger regularization (1e-4)")
+                    self.vprint(exc2)
+                    self.vprint("Trying with even stronger regularization (1e-4)")
                     try:
-                        return MultivariateNormal(means, covs + 1e-4 * torch.eye(covs.shape[-1]))
+                        return MultivariateNormal(means, covs + 1e-4 * torch.eye(covs.shape[-1],device=self.device))
                     except Exception as exc3:
-                        print(exc3)
-                        print("Trying with yet stronger regularization (1e-3)")
-                        return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1]))
+                        self.vprint(exc3)
+                        self.vprint("Trying with yet stronger regularization (1e-3)")
+                        return MultivariateNormal(means, covs + 1e-3 * torch.eye(covs.shape[-1],device=self.device))
 
         else:
             means, variances = self.get_prediction_with_uncertainty(X, **kwargs)
             if means.ndim in (1, 2):
                 means_squeeze, variances_squeeze = means.squeeze(), variances.squeeze()
                 if means_squeeze.ndim == 0:
-                    means_squeeze = torch.Tensor([means_squeeze])
+                    means_squeeze = torch.tensor([means_squeeze],dtype=torch.float,device=self.device)
                 if variances_squeeze.ndim == 0:
-                    variances_squeeze = torch.Tensor([variances_squeeze])
-                mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6))
+                    variances_squeeze = torch.tensor([variances_squeeze],dtype=torch.float,device=self.device)
+                mvn = MultivariateNormal(means_squeeze, torch.diag(variances_squeeze + 1e-6,device=self.device))
             else:
                 covar_diag = variances.squeeze(-1) + 1e-6
-                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1])
+                covars = torch.zeros(*covar_diag.shape, covar_diag.shape[-1],device=self.device)
                 for i in range(covar_diag.shape[-1]):
                     covars[..., i, i] = covar_diag[..., i]
                 mvn = MultivariateNormal(means.squeeze(-1), covars)
@@ -371,7 +383,7 @@ class NNEnsemble(Model):
         ), f"Expected tensor to have size=input_dim ({self.input_dim}) in last dimension, found tensor of shape {q.shape}"
         if q.shape[-len(self.batch_shape) - 2 : -2] != self.batch_shape:  # noqa: E203
             try:
-                print(f"Need to expand input shape {orig_input_shape} to match training batch shape {self.batch_shape}.")
+                self.vprint(f"Need to expand input shape {orig_input_shape} to match training batch shape {self.batch_shape}.")
                 if q.shape[-len(self.batch_shape) - 2 : -2] == torch.Size(len(self.batch_shape) * [1]):  # noqa: E203
                     q = q.expand(
                         *q.shape[: -len(self.batch_shape) - 2],
@@ -506,7 +518,8 @@ class NNEnsemble(Model):
                 X_train=X_train,
                 y_train=Y_train,
                 multi_fidelity=self.multi_fidelity,
-                fantasy_dict=fantasy_dict)
+                fantasy_dict=fantasy_dict,
+                verbose=self.verbose)
             if hasattr(self, "input_transform"):
                 fantasy_model.input_transform = self.input_transform
                 
@@ -530,7 +543,7 @@ class NNEnsemble(Model):
                     f_pred_fantasy.B = f_pred.B.tile((1,size_mult))/size_mult
                 f_pred_fantasy.load_state_dict(state_dict_new)
 
-            print('Training fantasy model.')
+            self.vprint('Training fantasy model.')
             fantasy_model.fit()
             fantasy_model.eval()
             fantasy_model.is_fantasy_model = True
