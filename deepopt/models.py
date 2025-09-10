@@ -61,7 +61,7 @@ class FidelityCostModel(DeterministicModel):
         """
         super().__init__()
         self._num_outputs = 1
-        self.fidelity_weights = torch.Tensor(fidelity_weights)
+        self.fidelity_weights = torch.tensor(fidelity_weights,dtype=torch.float)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
         """
@@ -75,7 +75,8 @@ class FidelityCostModel(DeterministicModel):
 
         :returns: A tensor containing the fidelity weight for the provided input, expanded to have an additional dimension.
         """
-        return self.fidelity_weights[X[..., -1].round().long()].unsqueeze(-1)
+        fidelity_weights = self.fidelity_weights.to(X.device)
+        return fidelity_weights[X[..., -1].round().long()].unsqueeze(-1)
 
 
 @dataclass
@@ -121,9 +122,10 @@ class DeepoptBaseModel(ABC):
     input_dim: int = None
     output_dim: int = None
     config: Dict[str, Any] = None
-    device: str = "cpu"
+    device: str = "auto"
     target: str = "dy"
     target_fidelities: Dict[int, float] = None
+    verbose: bool = False
 
     def __post_init__(self) -> None:
         try:
@@ -142,9 +144,19 @@ class DeepoptBaseModel(ABC):
             self.num_fidelities = int(self.bounds[1, -1]) + 1
         else:
             self.num_fidelities = 1
+            
+        if self.device=='auto':
+            self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        elif self.device=='cuda' or self.device=='gpu':
+            if torch.cuda.is_available():
+                self.device = 'cuda'
+            else:
+                print('No GPU available, setting device to CPU.')
+                self.device = 'cpu'
 
         self.full_train_X = self.full_train_X.to(self.device)
         self.full_train_Y = self.Y_orig.clone().to(self.device)
+        self.bounds = torch.tensor(self.bounds,dtype=torch.float,device=self.device)
 
         self.input_dim = self.full_train_X.size(-1)
         self.output_dim = self.full_train_Y.shape[-1]
@@ -232,8 +244,8 @@ class DeepoptBaseModel(ABC):
 
         :returns: A n x d tensor of samples where d is the dimension of the samples
         """
-        mean = torch.zeros_like(std_devs)
-        cov = torch.diag(std_devs**2)
+        mean = torch.zeros_like(std_devs,device=self.device)
+        cov = torch.diag(std_devs**2).to(self.device)
         engine = MultivariateNormalQMCEngine(mean, cov, seed=self.random_seed)
         samples = engine.draw(n)
         return samples
@@ -291,7 +303,7 @@ class DeepoptBaseModel(ABC):
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
         """
-        bounds = torch.FloatTensor(self.input_dim * [[0, 1]]).T
+        bounds = torch.tensor(self.input_dim * [[0, 1]],dtype=torch.float,device=self.device).T
         bounds[1, -1] = self.num_fidelities - 1
 
         cost_model = FidelityCostModel(fidelity_weights=fidelity_cost)
@@ -326,7 +338,7 @@ class DeepoptBaseModel(ABC):
 
         if acq_method in ("GIBBON", "MaxValEntropy"):
             n_candidates = 2000 * self.num_fidelities
-            candidate_set = torch.rand(n_candidates, self.input_dim)
+            candidate_set = torch.rand(n_candidates, self.input_dim,device=self.device)
             candidate_set[:, -1] *= self.num_fidelities - 1
             candidate_set[:, -1] = candidate_set[:, -1].round()
             if acq_method == "MaxValEntropy":
@@ -399,7 +411,7 @@ class DeepoptBaseModel(ABC):
                 options={"batch_limit": 5, "maxiter": 200, "seed": self.random_seed},
             )
         if propose_best:
-            best_candidate = torch.concat([best_candidate.reshape(1,-1),(self.num_fidelities-1)*torch.ones(1,1)],axis=1)
+            best_candidate = torch.concat([best_candidate.reshape(1,-1),(self.num_fidelities-1)*torch.ones(1,1,device=self.device)],axis=1)
             candidates = torch.concat([best_candidate,candidates],axis=0)
 
         print(f"{acq_value = }")
@@ -438,7 +450,7 @@ class DeepoptBaseModel(ABC):
         :returns: A two element tuple containing a q x d-dim tensor of generated candidates
             and an associated acquisition value.
         """
-        bounds = torch.FloatTensor(self.input_dim * [[0, 1]]).T
+        bounds = torch.tensor(self.input_dim * [[0, 1]],dtype=torch.float,device=self.device).T
 
         if propose_best:
             best_candidate, max_pmean = optimize_acqf(
@@ -469,7 +481,7 @@ class DeepoptBaseModel(ABC):
             # TODO: Verify call syntax for qNoisyExpectedImprovement (why does it need inputs?)
         elif acq_method == "MaxValEntropy":
             n_candidates = 1000
-            candidate_set = torch.rand(n_candidates, self.input_dim)
+            candidate_set = torch.rand(n_candidates, self.input_dim,device=self.device)
             q_acq = qMaxValueEntropy(
                 model,
                 posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
@@ -579,11 +591,11 @@ class DeepoptBaseModel(ABC):
         learner_file: str,
         acq_method: str,
         num_candidates: int = Defaults.num_candidates,
-        fidelity_cost: np.ndarray = torch.FloatTensor(json.loads(Defaults.fidelity_cost)),
+        fidelity_cost: np.ndarray = torch.tensor(json.loads(Defaults.fidelity_cost),dtype=torch.float),
         risk_measure: str = None,
         risk_level: float = None,
         risk_n_deltas: int = None,
-        x_stddev: str = None,
+        x_stddev: np.ndarray = None,
         n_fantasies: int = Defaults.n_fantasies,
         propose_best: bool = False,
         integer_fidelities: bool = False
@@ -631,15 +643,15 @@ class DeepoptBaseModel(ABC):
 
         if risk_measure:
             assert acq_method != "MaxValEntropy", "Risk measure not yet supported for MaxValueEntropy acquisition"
-            x_stddev_scaled = x_stddev / (self.bounds[1] - self.bounds[0])
-            bounds_scaled = torch.FloatTensor(self.input_dim * [[0, 1]]).T
+            x_stddev_scaled = x_stddev.to(self.bounds.device) / (self.bounds[1] - self.bounds[0])
+            bounds_scaled = torch.tensor(self.input_dim * [[0, 1]],dtype=torch.float).T
             if self.multi_fidelity:
                 x_stddev_scaled[-1] = 0
             risk_objective = self.get_risk_measure_objective(risk_measure=risk_measure, alpha=risk_level, n_w=risk_n_deltas)
             model.input_transform = self.get_input_perturbation(
                 risk_n_deltas=risk_n_deltas,
-                bounds=bounds_scaled,
-                X_stddev=x_stddev_scaled,
+                bounds=bounds_scaled.to(self.device),
+                X_stddev=x_stddev_scaled.to(self.device),
             )
         else:
             risk_objective = None
@@ -963,6 +975,7 @@ class NNEnsembleModel(DeepoptBaseModel):
             X_train=self.full_train_X,
             y_train=self.full_train_Y,
             multi_fidelity=self.multi_fidelity,
+            verbose=self.verbose,
         )
 
         model.fit()
@@ -999,6 +1012,7 @@ class NNEnsembleModel(DeepoptBaseModel):
             X_train=self.full_train_X,
             y_train=self.full_train_Y,
             multi_fidelity=self.multi_fidelity,
+            verbose=self.verbose
         )
 
         # NNEnsemble model requries the parent path and file name to be separated.
