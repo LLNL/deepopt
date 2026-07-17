@@ -11,7 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from os import getcwd
 from os.path import basename, dirname, join
-from typing import Any, Dict, Optional, Tuple, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type, Union
 
 import numpy as np
 import psutil
@@ -29,7 +29,9 @@ from botorch.models.deterministic import DeterministicModel
 from botorch.models.gp_regression_fidelity import SingleTaskGP, SingleTaskMultiFidelityGP
 from botorch.models.model import Model
 from botorch.models.transforms.input import InputPerturbation
+from botorch.optim.initializers import gen_batch_initial_conditions
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_mixed
+from botorch.utils.sampling import draw_sobol_samples
 from botorch.sampling.qmc import MultivariateNormalQMCEngine
 from botorch.sampling.samplers import SobolQMCNormalSampler
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
@@ -89,6 +91,22 @@ class AcquisitionOptimizationSettings:
     torch_num_threads: Optional[Union[int, str]]
     torch_num_threads_fraction: float
     torch_num_interop_threads: Optional[int]
+
+
+@dataclass(frozen=True)
+class AcquisitionOptimizationConstraints:
+    """
+    Optional constraints and initialization controls for acquisition optimization.
+    """
+
+    inequality_constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]] = None
+    equality_constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]] = None
+    nonlinear_inequality_constraints: Optional[List[Callable[[torch.Tensor], torch.Tensor]]] = None
+    post_processing_func: Optional[Callable[[torch.Tensor], torch.Tensor]] = None
+    batch_initial_conditions: Optional[torch.Tensor] = None
+    nonlinear_mode: str = "enforce"
+    nonlinear_initial_raw_samples: Optional[int] = None
+    nonlinear_initial_max_tries: int = 5
 
 
 
@@ -711,6 +729,374 @@ class DeepoptBaseModel(ABC):
     def _optimize_acqf_mixed(self, **kwargs: Any) -> Tuple[torch.Tensor, torch.Tensor]:
         return optimize_acqf_mixed(**kwargs)
 
+    def _normalize_optimization_constraints(
+        self,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
+        inequality_constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]] = None,
+        equality_constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]] = None,
+        nonlinear_inequality_constraints: Optional[List[Callable[[torch.Tensor], torch.Tensor]]] = None,
+        post_processing_func: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+        batch_initial_conditions: Optional[torch.Tensor] = None,
+        nonlinear_mode: str = "enforce",
+        nonlinear_initial_raw_samples: Optional[int] = None,
+        nonlinear_initial_max_tries: int = 5,
+    ) -> Optional[AcquisitionOptimizationConstraints]:
+        direct_constraints = any(
+            value is not None
+            for value in (
+                inequality_constraints,
+                equality_constraints,
+                nonlinear_inequality_constraints,
+                post_processing_func,
+                batch_initial_conditions,
+            )
+        )
+        if optimization_constraints is not None and direct_constraints:
+            raise ValueError("Pass either optimization_constraints or direct constraint arguments, not both.")
+        if optimization_constraints is None and not direct_constraints:
+            return None
+        constraints = optimization_constraints or AcquisitionOptimizationConstraints(
+            inequality_constraints=inequality_constraints,
+            equality_constraints=equality_constraints,
+            nonlinear_inequality_constraints=nonlinear_inequality_constraints,
+            post_processing_func=post_processing_func,
+            batch_initial_conditions=batch_initial_conditions,
+            nonlinear_mode=nonlinear_mode,
+            nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
+            nonlinear_initial_max_tries=nonlinear_initial_max_tries,
+        )
+        if constraints.nonlinear_mode not in {"enforce", "initialization_only"}:
+            raise ValueError("nonlinear_mode must be 'enforce' or 'initialization_only'.")
+        if constraints.nonlinear_initial_max_tries <= 0:
+            raise ValueError("nonlinear_initial_max_tries must be positive.")
+        nonlinear_constraints = self._normalize_nonlinear_constraints(constraints.nonlinear_inequality_constraints)
+        if nonlinear_constraints and self.multi_fidelity:
+            raise NotImplementedError("Nonlinear inequality constraints are only supported for single-fidelity optimization.")
+        return AcquisitionOptimizationConstraints(
+            inequality_constraints=self._linear_constraints_to_model_units(constraints.inequality_constraints),
+            equality_constraints=self._linear_constraints_to_model_units(constraints.equality_constraints),
+            nonlinear_inequality_constraints=nonlinear_constraints,
+            post_processing_func=constraints.post_processing_func,
+            batch_initial_conditions=self._batch_initial_conditions_to_model_units(constraints.batch_initial_conditions),
+            nonlinear_mode=constraints.nonlinear_mode,
+            nonlinear_initial_raw_samples=constraints.nonlinear_initial_raw_samples,
+            nonlinear_initial_max_tries=constraints.nonlinear_initial_max_tries,
+        )
+
+    def _normalize_nonlinear_constraints(
+        self,
+        nonlinear_constraints: Optional[Union[Callable[[torch.Tensor], torch.Tensor], Sequence[Callable[[torch.Tensor], torch.Tensor]]]],
+    ) -> Optional[List[Callable[[torch.Tensor], torch.Tensor]]]:
+        if nonlinear_constraints is None:
+            return None
+        if callable(nonlinear_constraints):
+            nonlinear_constraints = [nonlinear_constraints]
+        normalized = []
+        for constraint in nonlinear_constraints:
+            if not callable(constraint):
+                raise ValueError("Each nonlinear inequality constraint must be callable.")
+
+            def model_unit_constraint(X: torch.Tensor, constraint: Callable[[torch.Tensor], torch.Tensor] = constraint) -> torch.Tensor:
+                return constraint(self.input_scaler.inverse_transform(X))
+
+            normalized.append(model_unit_constraint)
+        return normalized
+
+    def _linear_constraints_to_model_units(
+        self,
+        constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]],
+    ) -> Optional[List[Tuple[torch.Tensor, torch.Tensor, float]]]:
+        if constraints is None:
+            return None
+        converted = []
+        for indices, coefficients, rhs in constraints:
+            raw_indices = indices.tolist() if hasattr(indices, "tolist") else list(indices)
+            if any(isinstance(index, (bool, np.bool_)) or not isinstance(index, (int, np.integer)) for index in raw_indices):
+                raise ValueError("Linear constraint indices must be integers.")
+            index_tensor = torch.as_tensor(raw_indices, dtype=torch.long, device=self.device).reshape(-1)
+            coefficient_tensor = torch.as_tensor(coefficients, dtype=torch.float, device=self.device).reshape(-1)
+            if index_tensor.numel() != coefficient_tensor.numel():
+                raise ValueError("Linear constraint indices and coefficients must have the same length.")
+            if index_tensor.numel() == 0:
+                raise ValueError("Linear constraints must include at least one index.")
+            if torch.any(index_tensor < 0) or torch.any(index_tensor >= self.input_dim):
+                raise ValueError(f"Linear constraint indices must be in [0, {self.input_dim}).")
+            rhs_value = float(rhs)
+            scales = self.bounds[1, index_tensor] - self.bounds[0, index_tensor]
+            offsets = self.bounds[0, index_tensor]
+            if self.multi_fidelity:
+                fidelity_terms = index_tensor == self.input_dim - 1
+                scales = torch.where(fidelity_terms, torch.ones_like(scales), scales)
+                offsets = torch.where(fidelity_terms, torch.zeros_like(offsets), offsets)
+            converted.append((index_tensor, coefficient_tensor * scales, rhs_value - torch.sum(coefficient_tensor * offsets).item()))
+        return converted
+
+    def _batch_initial_conditions_to_model_units(self, batch_initial_conditions: Optional[torch.Tensor]) -> Optional[torch.Tensor]:
+        if batch_initial_conditions is None:
+            return None
+        initial_conditions = torch.as_tensor(batch_initial_conditions, dtype=torch.float, device=self.device)
+        if initial_conditions.shape[-1] != self.input_dim:
+            raise ValueError(f"batch_initial_conditions last dimension must be {self.input_dim}.")
+        if initial_conditions.ndim == 2:
+            initial_conditions = initial_conditions.unsqueeze(-2)
+        if initial_conditions.ndim != 3:
+            raise ValueError("batch_initial_conditions must have shape num_restarts x q x input_dim or num_restarts x input_dim.")
+        return self.input_scaler.transform(initial_conditions)
+
+    @staticmethod
+    def _has_nonlinear_constraints(optimization_constraints: Optional[AcquisitionOptimizationConstraints]) -> bool:
+        return bool(optimization_constraints and optimization_constraints.nonlinear_inequality_constraints)
+
+    def _optimization_constraint_kwargs(
+        self,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints],
+        include_nonlinear: bool = True,
+    ) -> Dict[str, Any]:
+        if optimization_constraints is None:
+            return {}
+        kwargs: Dict[str, Any] = {}
+        for key in ("inequality_constraints", "equality_constraints", "post_processing_func", "batch_initial_conditions"):
+            value = getattr(optimization_constraints, key)
+            if value is not None:
+                kwargs[key] = value
+        if include_nonlinear and optimization_constraints.nonlinear_inequality_constraints is not None:
+            kwargs["nonlinear_inequality_constraints"] = optimization_constraints.nonlinear_inequality_constraints
+        return kwargs
+
+    def _make_constrained_acq_options(
+        self,
+        batch_limit: int,
+        maxiter: int,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints],
+    ) -> Dict[str, int]:
+        options = self._make_acq_options(batch_limit, maxiter)
+        if (
+            self._has_nonlinear_constraints(optimization_constraints)
+            and optimization_constraints.nonlinear_mode == "enforce"
+        ):
+            if options["batch_limit"] != 1:
+                warnings.warn(
+                    "BoTorch requires batch_limit=1 when enforcing nonlinear inequality constraints; overriding batch_limit.",
+                    RuntimeWarning,
+                )
+            options["batch_limit"] = 1
+        return options
+
+    def _make_feasible_nonlinear_initial_conditions(
+        self,
+        acq_function: Any,
+        bounds: torch.Tensor,
+        q: int,
+        num_restarts: int,
+        raw_samples: int,
+        options: Dict[str, int],
+        optimization_constraints: AcquisitionOptimizationConstraints,
+    ) -> torch.Tensor:
+        if optimization_constraints.batch_initial_conditions is not None:
+            return optimization_constraints.batch_initial_conditions
+        raw_samples = optimization_constraints.nonlinear_initial_raw_samples or raw_samples
+        raw_samples = max(raw_samples, num_restarts)
+        seed = options.get("seed", self.random_seed)
+        feasible_batches = []
+        for attempt in range(optimization_constraints.nonlinear_initial_max_tries):
+            if optimization_constraints.inequality_constraints or optimization_constraints.equality_constraints:
+                samples = gen_batch_initial_conditions(
+                    acq_function=acq_function,
+                    bounds=bounds,
+                    q=q,
+                    num_restarts=raw_samples,
+                    raw_samples=raw_samples,
+                    options={**options, "seed": seed + attempt},
+                    inequality_constraints=optimization_constraints.inequality_constraints,
+                    equality_constraints=optimization_constraints.equality_constraints,
+                )
+            else:
+                samples = draw_sobol_samples(bounds=bounds.cpu(), n=raw_samples, q=q, seed=seed + attempt).to(self.device)
+            feasible = self._nonlinear_feasible_mask(samples, optimization_constraints.nonlinear_inequality_constraints)
+            if feasible.any():
+                feasible_batches.append(samples[feasible])
+            if feasible_batches and sum(batch.shape[0] for batch in feasible_batches) >= num_restarts:
+                break
+        if not feasible_batches:
+            raise ValueError("Could not find nonlinear-feasible initial conditions.")
+        feasible_samples = torch.cat(feasible_batches, dim=0)
+        if feasible_samples.shape[0] < num_restarts:
+            raise ValueError(
+                "Not enough nonlinear-feasible initial conditions found; increase nonlinear_initial_raw_samples "
+                "or nonlinear_initial_max_tries, or relax the constraints."
+            )
+        with torch.no_grad():
+            values = acq_function(feasible_samples).reshape(-1)
+        top_indices = torch.topk(values, k=num_restarts).indices
+        return feasible_samples[top_indices]
+
+    def _filter_candidate_set_for_constraints(
+        self,
+        candidate_set: torch.Tensor,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints],
+    ) -> torch.Tensor:
+        if optimization_constraints is None:
+            return candidate_set
+        if optimization_constraints.equality_constraints:
+            raise NotImplementedError("Equality constraints are not supported with entropy acquisition candidate sets.")
+        feasible = torch.ones(candidate_set.shape[0], dtype=torch.bool, device=candidate_set.device)
+        for indices, coefficients, rhs in optimization_constraints.inequality_constraints or []:
+            feasible &= candidate_set[:, indices].matmul(coefficients) >= rhs
+        for indices, coefficients, rhs in optimization_constraints.equality_constraints or []:
+            feasible &= torch.isclose(candidate_set[:, indices].matmul(coefficients), torch.tensor(rhs, device=candidate_set.device, dtype=candidate_set.dtype))
+        if optimization_constraints.nonlinear_inequality_constraints:
+            feasible &= self._nonlinear_feasible_mask(
+                candidate_set.unsqueeze(-2),
+                optimization_constraints.nonlinear_inequality_constraints,
+            )
+        filtered = candidate_set[feasible]
+        if filtered.numel() == 0:
+            raise ValueError("No acquisition candidate_set points satisfy the optimization constraints.")
+        return filtered
+
+    @staticmethod
+    def _nonlinear_feasible_mask(
+        samples: torch.Tensor,
+        nonlinear_constraints: Sequence[Callable[[torch.Tensor], torch.Tensor]],
+    ) -> torch.Tensor:
+        feasible = torch.ones(samples.shape[0], dtype=torch.bool, device=samples.device)
+        for constraint in nonlinear_constraints:
+            values = constraint(samples)
+            constraint_feasible = values >= 0
+            while constraint_feasible.ndim > 1:
+                constraint_feasible = constraint_feasible.all(dim=-1)
+            feasible &= constraint_feasible.to(samples.device)
+        return feasible
+
+    def _constraint_kwargs_for_call(
+        self,
+        acq_function: Any,
+        bounds: torch.Tensor,
+        q: int,
+        num_restarts: int,
+        raw_samples: int,
+        options: Dict[str, int],
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints],
+    ) -> Tuple[Dict[str, Any], Dict[str, int]]:
+        if optimization_constraints is None:
+            return {}, options
+        if not self._has_nonlinear_constraints(optimization_constraints):
+            return self._optimization_constraint_kwargs(optimization_constraints), options
+        options = self._make_constrained_acq_options(options["batch_limit"], options["maxiter"], optimization_constraints)
+        batch_initial_conditions = self._make_feasible_nonlinear_initial_conditions(
+            acq_function=acq_function,
+            bounds=bounds,
+            q=q,
+            num_restarts=num_restarts,
+            raw_samples=raw_samples,
+            options=options,
+            optimization_constraints=optimization_constraints,
+        )
+        kwargs = self._optimization_constraint_kwargs(
+            optimization_constraints,
+            include_nonlinear=optimization_constraints.nonlinear_mode == "enforce",
+        )
+        kwargs["batch_initial_conditions"] = batch_initial_conditions
+        return kwargs, options
+
+    def _optimize_acqf_constrained(
+        self,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
+        **kwargs: Any,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if not self._has_nonlinear_constraints(optimization_constraints):
+            return self._optimize_acqf(**kwargs, **self._optimization_constraint_kwargs(optimization_constraints))
+        if kwargs["q"] > 1 and (
+            optimization_constraints.nonlinear_mode == "enforce" or kwargs.get("sequential", False)
+        ):
+            if isinstance(kwargs["acq_function"], qKnowledgeGradient):
+                raise NotImplementedError("Nonlinear constraints with KG currently require num_candidates=1.")
+            return self._optimize_acqf_nonlinear_sequential(optimization_constraints, **kwargs)
+        constraint_kwargs, options = self._constraint_kwargs_for_call(
+            acq_function=kwargs["acq_function"],
+            bounds=kwargs["bounds"],
+            q=kwargs["q"],
+            num_restarts=kwargs["num_restarts"],
+            raw_samples=kwargs["raw_samples"],
+            options=kwargs["options"],
+            optimization_constraints=optimization_constraints,
+        )
+        kwargs["options"] = options
+        return self._optimize_acqf(**kwargs, **constraint_kwargs)
+
+    def _optimize_acqf_nonlinear_sequential(
+        self,
+        optimization_constraints: AcquisitionOptimizationConstraints,
+        **kwargs: Any,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        acq_function = kwargs["acq_function"]
+        if not hasattr(acq_function, "set_X_pending"):
+            raise NotImplementedError("Sequential nonlinear optimization requires an acquisition function with set_X_pending.")
+        q = kwargs["q"]
+        base_X_pending = getattr(acq_function, "X_pending", None)
+        candidate_list = []
+        acq_value_list = []
+        try:
+            for _ in range(q):
+                step_kwargs = dict(kwargs)
+                step_kwargs["q"] = 1
+                step_kwargs["sequential"] = False
+                candidate, acq_value = self._optimize_acqf_constrained(optimization_constraints, **step_kwargs)
+                candidate_list.append(candidate)
+                acq_value_list.append(acq_value)
+                candidates = torch.cat(candidate_list, dim=-2)
+                acq_function.set_X_pending(
+                    torch.cat([base_X_pending, candidates], dim=-2) if base_X_pending is not None else candidates
+                )
+        finally:
+            acq_function.set_X_pending(base_X_pending)
+        return torch.cat(candidate_list, dim=-2), torch.stack(acq_value_list)
+
+    def _optimize_acqf_mixed_constrained(
+        self,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
+        **kwargs: Any,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        if self._has_nonlinear_constraints(optimization_constraints):
+            raise NotImplementedError("Nonlinear inequality constraints are not supported for multi-fidelity mixed optimization.")
+        return self._optimize_acqf_mixed(**kwargs, **self._optimization_constraint_kwargs(optimization_constraints))
+
+    def _fixed_feature_subproblem_constraints(
+        self,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints],
+        fixed_features: Dict[int, float],
+    ) -> Optional[AcquisitionOptimizationConstraints]:
+        if optimization_constraints is None:
+            return None
+        if self._has_nonlinear_constraints(optimization_constraints):
+            raise NotImplementedError("Nonlinear inequality constraints are not supported for fixed-feature subproblems.")
+
+        def reduce_constraints(constraints, equality: bool = False):
+            if constraints is None:
+                return None
+            reduced = []
+            fixed_indices = sorted(fixed_features)
+            for indices, coefficients, rhs in constraints:
+                kept_indices = []
+                kept_coefficients = []
+                adjusted_rhs = rhs
+                for index, coefficient in zip(indices.tolist(), coefficients.tolist()):
+                    if index in fixed_features:
+                        adjusted_rhs -= coefficient * fixed_features[index]
+                    else:
+                        kept_indices.append(index - sum(fixed_index < index for fixed_index in fixed_indices))
+                        kept_coefficients.append(coefficient)
+                if kept_indices:
+                    reduced.append((torch.tensor(kept_indices, dtype=torch.long, device=self.device), torch.tensor(kept_coefficients, dtype=torch.float, device=self.device), adjusted_rhs))
+                elif (equality and abs(adjusted_rhs) > 1e-7) or (not equality and adjusted_rhs > 0):
+                    raise ValueError("Fixed-feature subproblem cannot satisfy a linear constraint.")
+            return reduced or None
+
+        return AcquisitionOptimizationConstraints(
+            inequality_constraints=reduce_constraints(optimization_constraints.inequality_constraints),
+            equality_constraints=reduce_constraints(optimization_constraints.equality_constraints, equality=True),
+        )
+
     def _get_candidates_mf(
         self,
         model: Type[Model],
@@ -721,6 +1107,7 @@ class DeepoptBaseModel(ABC):
         risk_n_deltas: Optional[int] = None,
         optimization_settings: Optional[AcquisitionOptimizationSettings] = None,
         propose_best: Optional[bool] = False,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Get the candidates for a multi-fidelity run.
@@ -766,19 +1153,28 @@ class DeepoptBaseModel(ABC):
                 values=[self.num_fidelities - 1],
             )
 
-            best_candidate, max_pmean = self._optimize_acqf(
+            subproblem_constraints = self._fixed_feature_subproblem_constraints(
+                optimization_constraints,
+                {self.input_dim - 1: self.num_fidelities - 1},
+            )
+            best_candidate, max_pmean = self._optimize_acqf_constrained(
                 acq_function=curr_val_acqf,
                 bounds=bounds[:, :-1],
                 q=1,
                 num_restarts=settings.num_restarts_high,
                 raw_samples=settings.raw_samples_high,
-                options=self._make_acq_options(settings.batch_limit_high, settings.maxiter),
+                options=self._make_constrained_acq_options(
+                    settings.batch_limit_high,
+                    settings.maxiter,
+                    subproblem_constraints,
+                ),
+                optimization_constraints=subproblem_constraints,
             )
             q-=1
             if q==0:
                 acq_value = max_pmean
                 print(f"{acq_value = }")
-                candidates = torch.concat([best_candidate.reshape(1,-1),(self.num_fidelities-1)*torch.ones(1,1)],axis=1)
+                candidates = torch.concat([best_candidate.reshape(1,-1),(self.num_fidelities-1)*torch.ones(1,1,device=self.device)],axis=1)
                 return candidates, acq_value
 
 
@@ -787,6 +1183,7 @@ class DeepoptBaseModel(ABC):
             candidate_set = torch.rand(n_candidates, self.input_dim,device=self.device)
             candidate_set[:, -1] *= self.num_fidelities - 1
             candidate_set[:, -1] = candidate_set[:, -1].round()
+            candidate_set = self._filter_candidate_set_for_constraints(candidate_set, optimization_constraints)
             if acq_method == "MaxValEntropy":
                 q_acq = qMultiFidelityMaxValueEntropy(
                     model,
@@ -806,14 +1203,19 @@ class DeepoptBaseModel(ABC):
                     candidate_set=candidate_set,
                     seed=self.random_seed,
                 )
-            candidates, acq_value = self._optimize_acqf_mixed(
+            candidates, acq_value = self._optimize_acqf_mixed_constrained(
                 acq_function=q_acq,
                 bounds=bounds,
                 fixed_features_list=[{self.input_dim - 1: i} for i in range(self.num_fidelities)],
                 q=q,
                 num_restarts=settings.num_restarts_high,
                 raw_samples=settings.raw_samples_high,
-                options=self._make_acq_options(settings.batch_limit_high, settings.maxiter),
+                options=self._make_constrained_acq_options(
+                    settings.batch_limit_high,
+                    settings.maxiter,
+                    optimization_constraints,
+                ),
+                optimization_constraints=optimization_constraints,
             )
         elif acq_method == "KG":
             if not propose_best:
@@ -827,13 +1229,22 @@ class DeepoptBaseModel(ABC):
                     values=[self.num_fidelities - 1],
                 )
 
-                _, max_pmean = self._optimize_acqf(
+                subproblem_constraints = self._fixed_feature_subproblem_constraints(
+                    optimization_constraints,
+                    {self.input_dim - 1: self.num_fidelities - 1},
+                )
+                _, max_pmean = self._optimize_acqf_constrained(
                     acq_function=curr_val_acqf,
                     bounds=bounds[:, :-1],
                     q=1,
                     num_restarts=settings.num_restarts_high,
                     raw_samples=settings.raw_samples_high,
-                    options=self._make_acq_options(settings.batch_limit_high, settings.maxiter),
+                    options=self._make_constrained_acq_options(
+                        settings.batch_limit_high,
+                        settings.maxiter,
+                        subproblem_constraints,
+                    ),
+                    optimization_constraints=subproblem_constraints,
                 )
             
 
@@ -847,14 +1258,19 @@ class DeepoptBaseModel(ABC):
                 project=self._project,
                 objective=risk_objective,
             )
-            candidates, acq_value = self._optimize_acqf_mixed(
+            candidates, acq_value = self._optimize_acqf_mixed_constrained(
                 acq_function=mfkg_acqf,
                 bounds=bounds,
                 fixed_features_list=[{self.input_dim - 1: i} for i in range(self.num_fidelities)],
                 q=q,
                 num_restarts=settings.num_restarts_low,
                 raw_samples=settings.raw_samples_low,
-                options=self._make_acq_options(settings.batch_limit_low, settings.maxiter),
+                options=self._make_constrained_acq_options(
+                    settings.batch_limit_low,
+                    settings.maxiter,
+                    optimization_constraints,
+                ),
+                optimization_constraints=optimization_constraints,
             )
         if propose_best:
             best_candidate = torch.concat([best_candidate.reshape(1,-1),(self.num_fidelities-1)*torch.ones(1,1,device=self.device)],axis=1)
@@ -872,6 +1288,7 @@ class DeepoptBaseModel(ABC):
         risk_n_deltas: Optional[int] = None,
         optimization_settings: Optional[AcquisitionOptimizationSettings] = None,
         propose_best: Optional[bool] = False,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
     ) -> Tuple[Any, Any]:
         """
         Get the candidates for a single-fidelity run.
@@ -899,9 +1316,11 @@ class DeepoptBaseModel(ABC):
         settings = self._resolve_optimization_settings(optimization_settings)
         n_fantasies = settings.n_fantasies
         bounds = torch.tensor(self.input_dim * [[0, 1]],dtype=torch.float,device=self.device).T
+        if acq_method == "KG" and self._has_nonlinear_constraints(optimization_constraints):
+            raise NotImplementedError("Nonlinear constraints are not supported with KG acquisition optimization.")
 
         if propose_best:
-            best_candidate, max_pmean = self._optimize_acqf(
+            best_candidate, max_pmean = self._optimize_acqf_constrained(
                 acq_function=PosteriorMean(
                     model,
                     posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
@@ -910,7 +1329,12 @@ class DeepoptBaseModel(ABC):
                 q=1,
                 num_restarts=settings.num_restarts_high,
                 raw_samples=settings.raw_samples_high,
-                options=self._make_acq_options(settings.batch_limit_high, settings.maxiter),
+                options=self._make_constrained_acq_options(
+                    settings.batch_limit_high,
+                    settings.maxiter,
+                    optimization_constraints,
+                ),
+                optimization_constraints=optimization_constraints,
             )
             q-=1
             if q==0:
@@ -928,6 +1352,7 @@ class DeepoptBaseModel(ABC):
         elif acq_method == "MaxValEntropy":
             n_candidates = 1000
             candidate_set = torch.rand(n_candidates, self.input_dim,device=self.device)
+            candidate_set = self._filter_candidate_set_for_constraints(candidate_set, optimization_constraints)
             q_acq = qMaxValueEntropy(
                 model,
                 posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
@@ -937,7 +1362,7 @@ class DeepoptBaseModel(ABC):
             )
         elif acq_method == "KG":
             if not propose_best:
-                _, max_pmean = self._optimize_acqf(
+                _, max_pmean = self._optimize_acqf_constrained(
                     acq_function=PosteriorMean(
                         model,
                         posterior_transform=ExpectationPosteriorTransform(n_w=risk_n_deltas) if risk_objective else None,
@@ -946,7 +1371,12 @@ class DeepoptBaseModel(ABC):
                     q=1,
                     num_restarts=settings.num_restarts_high,
                     raw_samples=settings.raw_samples_high,
-                    options=self._make_acq_options(settings.batch_limit_high, settings.maxiter),
+                    options=self._make_constrained_acq_options(
+                        settings.batch_limit_high,
+                        settings.maxiter,
+                        optimization_constraints,
+                    ),
+                    optimization_constraints=optimization_constraints,
                 )
             
             q_acq = qKnowledgeGradient(
@@ -957,17 +1387,20 @@ class DeepoptBaseModel(ABC):
                 current_value=max_pmean,
                 objective=risk_objective,
             )
-        candidates, acq_value = self._optimize_acqf(
+        is_expensive_acq = acq_method in ["MaxValEntropy", "KG"]
+        candidates, acq_value = self._optimize_acqf_constrained(
             acq_function=q_acq,
             bounds=bounds,
             q=q,
-            num_restarts=settings.num_restarts_low if acq_method in ["MaxValEntropy", "KG"] else settings.num_restarts_high,
-            raw_samples=settings.raw_samples_low if acq_method in ["MaxValEntropy", "KG"] else settings.raw_samples_high,
+            num_restarts=settings.num_restarts_low if is_expensive_acq else settings.num_restarts_high,
+            raw_samples=settings.raw_samples_low if is_expensive_acq else settings.raw_samples_high,
             sequential=(acq_method == "MaxValEntropy"),
-            options=self._make_acq_options(
-                settings.batch_limit_low if acq_method in ["MaxValEntropy", "KG"] else settings.batch_limit_high,
+            options=self._make_constrained_acq_options(
+                settings.batch_limit_low if is_expensive_acq else settings.batch_limit_high,
                 settings.maxiter,
+                optimization_constraints,
             ),
+            optimization_constraints=optimization_constraints,
         )
         if propose_best:
             candidates = torch.concat([best_candidate.reshape(1,-1),candidates],axis=0)
@@ -984,6 +1417,7 @@ class DeepoptBaseModel(ABC):
         fidelity_cost: Optional[np.ndarray] = None,
         optimization_settings: Optional[AcquisitionOptimizationSettings] = None,
         propose_best: Optional[bool] = False,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
     ) -> Tuple[Any, Any]:
         """
         Get the candidates using the model loaded in with `load_model` and the acquisition method
@@ -1022,6 +1456,7 @@ class DeepoptBaseModel(ABC):
                 risk_n_deltas=risk_n_deltas,
                 optimization_settings=optimization_settings,
                 propose_best=propose_best,
+                optimization_constraints=optimization_constraints,
             )
         else:
             candidates, acq_value = self._get_candidates_sf(
@@ -1032,6 +1467,7 @@ class DeepoptBaseModel(ABC):
                 risk_n_deltas=risk_n_deltas,
                 optimization_settings=optimization_settings,
                 propose_best=propose_best,
+                optimization_constraints=optimization_constraints,
             )
         return candidates, acq_value
 
@@ -1049,6 +1485,15 @@ class DeepoptBaseModel(ABC):
         propose_best: bool = False,
         integer_fidelities: bool = False,
         optimization_settings: Optional[AcquisitionOptimizationSettings] = None,
+        optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
+        inequality_constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]] = None,
+        equality_constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]] = None,
+        nonlinear_inequality_constraints: Optional[List[Callable[[torch.Tensor], torch.Tensor]]] = None,
+        post_processing_func: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
+        batch_initial_conditions: Optional[torch.Tensor] = None,
+        nonlinear_mode: str = "enforce",
+        nonlinear_initial_raw_samples: Optional[int] = None,
+        nonlinear_initial_max_tries: int = 5,
     ) -> None:
         """
         The function to process the `deepopt optimize` command.
@@ -1074,6 +1519,17 @@ class DeepoptBaseModel(ABC):
             Saved numpy array had dtype 'object' and requires `allow_pickle=True` option in `np.load` to read.
         """
         optimization_settings = self._resolve_optimization_settings(optimization_settings)
+        optimization_constraints = self._normalize_optimization_constraints(
+            optimization_constraints=optimization_constraints,
+            inequality_constraints=inequality_constraints,
+            equality_constraints=equality_constraints,
+            nonlinear_inequality_constraints=nonlinear_inequality_constraints,
+            post_processing_func=post_processing_func,
+            batch_initial_conditions=batch_initial_conditions,
+            nonlinear_mode=nonlinear_mode,
+            nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
+            nonlinear_initial_max_tries=nonlinear_initial_max_tries,
+        )
         self._configure_torch_threads(optimization_settings)
         print(
             f"""
@@ -1118,6 +1574,7 @@ class DeepoptBaseModel(ABC):
             fidelity_cost=fidelity_cost,
             optimization_settings=optimization_settings,
             propose_best=propose_best,
+            optimization_constraints=optimization_constraints,
         )
         if self.multi_fidelity:
             candidates[:, :-1] = candidates[:, :-1] * (self.bounds[1, :-1] - self.bounds[0, :-1]) + self.bounds[0, :-1]

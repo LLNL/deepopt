@@ -83,3 +83,32 @@ Advanced optimization settings include:
 | `torch_num_interop_threads` | PyTorch inter-op thread count. Use an integer or `null`. |
 
 For `torch_num_threads: auto`, DeepOpt uses all available CPUs on small machines (8 or fewer CPUs). On larger allocations it uses `floor(torch_num_threads_fraction * available_cpus)`, preferring CPU affinity and Slurm CPU variables when available. If thread environment variables such as `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, or `TORCH_NUM_THREADS` are already set, DeepOpt does not override PyTorch's intra-op thread count unless an explicit integer is provided.
+
+## Constrained Candidate Generation
+
+`deepopt optimize` supports BoTorch-style linear constraints in original input units:
+
+```bash
+deepopt optimize \
+  -l learner_GP.ckpt \
+  -o suggested_inputs.npy \
+  -a EI \
+  --inequality-constraints '[[[0, 1], [1.0, -1.0], 0.0]]'
+```
+
+Each linear constraint is `[indices, coefficients, rhs]`. Inequality constraints use `sum(coefficients[i] * x[indices[i]]) >= rhs`; equality constraints use `== rhs`. DeepOpt converts these original-unit constraints to the scaled optimizer coordinates internally. In multi-fidelity runs, the fidelity column is treated as an unscaled fidelity index.
+
+Nonlinear inequality constraints can be loaded from trusted local Python code:
+
+```bash
+deepopt optimize \
+  -l learner_GP.ckpt \
+  -o suggested_inputs.npy \
+  -a EI \
+  --nonlinear-inequality-constraints constraints.py:make_constraints \
+  --nonlinear-mode enforce
+```
+
+The referenced function must either be a constraint callable itself or return a callable/list of callables. A point is feasible when each callable returns a value `>= 0`. These callables receive candidate tensors in original input units.
+
+`--nonlinear-mode enforce` passes nonlinear constraints to BoTorch. With the pinned BoTorch optimizer this requires `batch_limit=1`; for multiple candidates DeepOpt uses sequential `q=1` optimizer calls where supported. `--nonlinear-mode initialization-only` only uses the nonlinear constraints to choose feasible initial conditions, preserving larger batch limits but not guaranteeing final candidate feasibility.

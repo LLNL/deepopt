@@ -3,9 +3,11 @@ This module establishes the entrypoint to the DeepOpt library and handles the
 creation of all commands and options via the
 [Click](https://click.palletsprojects.com/en/latest/) library.
 """
+import importlib.util
+import inspect
 import json
 from gettext import ngettext
-from typing import Any, List, Mapping, Tuple, Union
+from typing import Any, Callable, List, Mapping, Tuple, Union
 
 import click
 import torch
@@ -14,7 +16,71 @@ from click.core import iter_params_for_processing
 
 from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
-from deepopt.models import DelUQModel, GPModel, NNEnsembleModel, get_checkpoint_metadata, load_deepopt_wrapper
+from deepopt.models import (
+    AcquisitionOptimizationConstraints,
+    DelUQModel,
+    GPModel,
+    NNEnsembleModel,
+    get_checkpoint_metadata,
+    load_deepopt_wrapper,
+)
+
+
+def _parse_linear_constraints(value: Union[str, None], option_name: str) -> Union[List[Tuple[List[int], List[float], float]], None]:
+    if value is None:
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise click.BadParameter(f"{option_name} must be valid JSON: {exc}") from exc
+    if not isinstance(parsed, list):
+        raise click.BadParameter(f"{option_name} must be a JSON list of constraints.")
+    constraints = []
+    for item in parsed:
+        if not isinstance(item, list) or len(item) != 3:
+            raise click.BadParameter(f"Each {option_name} entry must be [indices, coefficients, rhs].")
+        indices, coefficients, rhs = item
+        if not isinstance(indices, list) or not isinstance(coefficients, list):
+            raise click.BadParameter(f"{option_name} indices and coefficients must be lists.")
+        if len(indices) != len(coefficients):
+            raise click.BadParameter(f"{option_name} indices and coefficients must have the same length.")
+        if any(isinstance(index, bool) or not isinstance(index, int) for index in indices):
+            raise click.BadParameter(f"{option_name} indices must be integers.")
+        try:
+            constraints.append((indices, [float(coefficient) for coefficient in coefficients], float(rhs)))
+        except (TypeError, ValueError) as exc:
+            raise click.BadParameter(f"{option_name} entries must contain integer indices and numeric coefficients/rhs.") from exc
+    return constraints
+
+
+def _load_nonlinear_constraints(reference: Union[str, None]) -> Union[List[Callable], None]:
+    if reference is None:
+        return None
+    script_path, separator, function_name = reference.partition(":")
+    if not separator or not function_name:
+        raise click.BadParameter("Use --nonlinear-inequality-constraints path/to/file.py:function_name.")
+    spec = importlib.util.spec_from_file_location("deepopt_cli_constraints", script_path)
+    if spec is None or spec.loader is None:
+        raise click.BadParameter(f"Could not load constraint script {script_path}.")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except FileNotFoundError as exc:
+        raise click.BadParameter(f"Constraint script does not exist: {script_path}.") from exc
+    function = getattr(module, function_name, None)
+    if function is None:
+        raise click.BadParameter(f"Constraint script {script_path} has no function {function_name}.")
+    if not callable(function):
+        raise click.BadParameter(f"{function_name} in {script_path} is not callable.")
+    if len(inspect.signature(function).parameters) == 0:
+        constraints = function()
+    else:
+        constraints = function
+    if callable(constraints):
+        return [constraints]
+    if isinstance(constraints, (list, tuple)) and all(callable(constraint) for constraint in constraints):
+        return list(constraints)
+    raise click.BadParameter("Nonlinear constraint function must return a callable or a list of callables.")
 
 
 def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel, NNEnsembleModel]:
@@ -392,6 +458,40 @@ def learn(
     default=False,
     show_default=True,
 )
+@click.option(
+    "--inequality-constraints",
+    help="JSON list of linear inequality constraints [indices, coefficients, rhs] in original input units.",
+    type=click.STRING,
+)
+@click.option(
+    "--equality-constraints",
+    help="JSON list of linear equality constraints [indices, coefficients, rhs] in original input units.",
+    type=click.STRING,
+)
+@click.option(
+    "--nonlinear-inequality-constraints",
+    help="Trusted Python constraint loader in the form path/to/file.py:function_name.",
+    type=click.STRING,
+)
+@click.option(
+    "--nonlinear-mode",
+    help="How to use nonlinear constraints.",
+    type=click.Choice(["enforce", "initialization-only"]),
+    default="enforce",
+    show_default=True,
+)
+@click.option(
+    "--nonlinear-initial-raw-samples",
+    help="Raw samples used when searching for nonlinear-feasible initial conditions.",
+    type=click.INT,
+)
+@click.option(
+    "--nonlinear-initial-max-tries",
+    help="Maximum attempts to find nonlinear-feasible initial conditions.",
+    type=click.INT,
+    default=5,
+    show_default=True,
+)
 def optimize(
     infile,
     outfile,
@@ -412,6 +512,12 @@ def optimize(
     x_stddev,
     propose_best,
     integer_fidelities,
+    inequality_constraints,
+    equality_constraints,
+    nonlinear_inequality_constraints,
+    nonlinear_mode,
+    nonlinear_initial_raw_samples,
+    nonlinear_initial_max_tries,
 ) -> None:
     """
     Load in the model created by ``learn`` and use it to propose new simulation points.
@@ -459,6 +565,19 @@ def optimize(
     else:
         fidelity_cost = None
         integer_fidelities = False
+    optimization_constraints = AcquisitionOptimizationConstraints(
+        inequality_constraints=_parse_linear_constraints(inequality_constraints, "--inequality-constraints"),
+        equality_constraints=_parse_linear_constraints(equality_constraints, "--equality-constraints"),
+        nonlinear_inequality_constraints=_load_nonlinear_constraints(nonlinear_inequality_constraints),
+        nonlinear_mode=nonlinear_mode.replace("-", "_"),
+        nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
+        nonlinear_initial_max_tries=nonlinear_initial_max_tries,
+    )
+    if not any(
+        getattr(optimization_constraints, key) is not None
+        for key in ("inequality_constraints", "equality_constraints", "nonlinear_inequality_constraints")
+    ):
+        optimization_constraints = None
     model.optimize(
         outfile=outfile,
         learner_file=learner_file,
@@ -471,6 +590,7 @@ def optimize(
         x_stddev=x_stddev,
         propose_best=propose_best,
         integer_fidelities=integer_fidelities,
+        optimization_constraints=optimization_constraints,
     )
 
 

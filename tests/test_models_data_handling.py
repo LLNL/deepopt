@@ -9,6 +9,7 @@ pytest.importorskip("ray")
 from deepopt.configuration import ConfigSettings
 from deepopt.models import (
     DEEPOPT_CHECKPOINT_KEY,
+    AcquisitionOptimizationConstraints,
     AcquisitionOptimizationSettings,
     DeepoptBaseModel,
     DeepOptSingleTaskGP,
@@ -364,6 +365,213 @@ def test_single_fidelity_expensive_acquisitions_use_low_restart_settings(
     assert captured["num_restarts"] == 4
     assert captured["raw_samples"] == 30
     assert captured["options"] == {"batch_limit": 3, "maxiter": 22, "seed": wrapper.random_seed}
+
+
+def test_single_fidelity_linear_constraints_convert_and_forward(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[10.0, 0.0], [20.0, 2.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: object())
+
+    def fake_optimize_acqf(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.1, 0.2]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    wrapper._get_candidates_sf(
+        model=object(),
+        acq_method="EI",
+        q=1,
+        optimization_constraints=wrapper._normalize_optimization_constraints(
+            inequality_constraints=[([0, 1], [1.0, 2.0], 14.0)],
+            equality_constraints=[([1], [1.0], 1.0)],
+        ),
+    )
+
+    ineq_indices, ineq_coefficients, ineq_rhs = captured["inequality_constraints"][0]
+    torch.testing.assert_close(ineq_indices.cpu(), torch.tensor([0, 1]))
+    torch.testing.assert_close(ineq_coefficients.cpu(), torch.tensor([10.0, 4.0]))
+    assert ineq_rhs == pytest.approx(4.0)
+    eq_indices, eq_coefficients, eq_rhs = captured["equality_constraints"][0]
+    torch.testing.assert_close(eq_indices.cpu(), torch.tensor([1]))
+    torch.testing.assert_close(eq_coefficients.cpu(), torch.tensor([2.0]))
+    assert eq_rhs == pytest.approx(1.0)
+
+
+def test_multi_fidelity_linear_constraints_keep_fidelity_unscaled(monkeypatch, multi_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[10.0, 0.0, 0.0], [20.0, 2.0, 2.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(multi_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        multi_fidelity=True,
+        device="cpu",
+    )
+    captured = {}
+
+    def fake_mf_mes(*args, **kwargs):
+        return object()
+
+    def fake_optimize_acqf_mixed(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.1, 0.2, 1.0]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.qMultiFidelityMaxValueEntropy", fake_mf_mes)
+    monkeypatch.setattr("deepopt.models.optimize_acqf_mixed", fake_optimize_acqf_mixed)
+
+    wrapper._get_candidates_mf(
+        model=object(),
+        acq_method="MaxValEntropy",
+        q=1,
+        fidelity_cost=np.array([1.0, 3.0, 5.0], dtype=np.float32),
+        optimization_constraints=wrapper._normalize_optimization_constraints(
+            inequality_constraints=[([0, 2], [1.0, 1.0], 12.0)],
+        ),
+    )
+
+    indices, coefficients, rhs = captured["inequality_constraints"][0]
+    torch.testing.assert_close(indices.cpu(), torch.tensor([0, 2]))
+    torch.testing.assert_close(coefficients.cpu(), torch.tensor([10.0, 1.0]))
+    assert rhs == pytest.approx(2.0)
+
+
+def test_nonlinear_constraints_force_batch_limit_and_initial_conditions(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    settings.set_setting("optimization", {"profile": "fast", "batch_limit_high": 4})
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    class FakeAcq:
+        X_pending = None
+
+        def __call__(self, X):
+            return X.sum(dim=(-1, -2))
+
+        def set_X_pending(self, X_pending):
+            self.X_pending = X_pending
+
+    initial_conditions = torch.tensor([[[0.8, 0.2]]], dtype=torch.float32)
+
+    def fake_optimize_acqf(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.8, 0.2]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: FakeAcq())
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    with pytest.warns(RuntimeWarning, match="batch_limit=1"):
+        wrapper._get_candidates_sf(
+            model=object(),
+            acq_method="EI",
+            q=1,
+            optimization_constraints=wrapper._normalize_optimization_constraints(
+                nonlinear_inequality_constraints=[lambda X: X[..., 0] - 0.5],
+                batch_initial_conditions=initial_conditions,
+            ),
+        )
+
+    assert captured["options"]["batch_limit"] == 1
+    assert "nonlinear_inequality_constraints" in captured
+    torch.testing.assert_close(captured["batch_initial_conditions"], initial_conditions)
+
+
+def test_entropy_candidate_sets_reject_equality_constraints(single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+
+    with pytest.raises(NotImplementedError, match="Equality constraints"):
+        wrapper._filter_candidate_set_for_constraints(
+            torch.rand(10, 2),
+            wrapper._normalize_optimization_constraints(equality_constraints=[([0], [1.0], 0.5)]),
+        )
+
+
+def test_nonlinear_initialization_only_omits_botorch_constraints(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    class FakeAcq:
+        def __call__(self, X):
+            return X.sum(dim=(-1, -2))
+
+    def fake_optimize_acqf(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.8, 0.2]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: FakeAcq())
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    wrapper._get_candidates_sf(
+        model=object(),
+        acq_method="EI",
+        q=1,
+        optimization_constraints=wrapper._normalize_optimization_constraints(
+            nonlinear_inequality_constraints=[lambda X: X[..., 0] - 0.5],
+            nonlinear_mode="initialization_only",
+            nonlinear_initial_raw_samples=16,
+        ),
+    )
+
+    assert "nonlinear_inequality_constraints" not in captured
+    assert captured["options"]["batch_limit"] != 1
+    assert torch.all(captured["batch_initial_conditions"][..., 0] >= 0.5)
+
+
+def test_multi_fidelity_rejects_nonlinear_constraints(multi_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(multi_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        multi_fidelity=True,
+        device="cpu",
+    )
+
+    with pytest.raises(NotImplementedError, match="single-fidelity"):
+        wrapper._normalize_optimization_constraints(nonlinear_inequality_constraints=[lambda X: X[..., 0]])
+
+
+def test_model_rejects_non_integer_constraint_indices(single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+
+    with pytest.raises(ValueError, match="indices must be integers"):
+        wrapper._normalize_optimization_constraints(inequality_constraints=[([1.9], [1.0], 0.0)])
 
 
 def test_multi_fidelity_candidate_generation_uses_resolved_optimization_settings(

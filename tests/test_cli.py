@@ -8,7 +8,7 @@ pytest.importorskip("gpytorch")
 pytest.importorskip("ray")
 
 from deepopt.deepopt_cli import deepopt_cli, get_deepopt_model
-from deepopt.models import DEEPOPT_CHECKPOINT_KEY, DelUQModel, GPModel, NNEnsembleModel
+from deepopt.models import DEEPOPT_CHECKPOINT_KEY, AcquisitionOptimizationConstraints, DelUQModel, GPModel, NNEnsembleModel
 
 pytestmark = pytest.mark.requires_botorch
 
@@ -122,6 +122,119 @@ def test_optimize_cli_parses_conditional_multi_fidelity_values(
     assert model.multi_fidelity is True
     np.testing.assert_allclose(kwargs["fidelity_cost"], np.array([1.0, 3.0], dtype=np.float32))
     assert kwargs["integer_fidelities"] is True
+
+
+def test_optimize_cli_parses_constraints(monkeypatch, single_fidelity_data_file, tmp_path):
+    learner_file = tmp_path / "learner.ckpt"
+    learner_file.write_text("placeholder")
+    constraint_script = tmp_path / "constraints.py"
+    constraint_script.write_text(
+        "def make_constraints():\n"
+        "    def c(X):\n"
+        "        return X[..., 0] - 0.2\n"
+        "    return [c]\n"
+    )
+    calls = []
+
+    def fake_optimize(self, **kwargs):
+        calls.append(kwargs)
+
+    monkeypatch.setattr(GPModel, "optimize", fake_optimize)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        deepopt_cli,
+        [
+            "optimize",
+            "-i",
+            str(single_fidelity_data_file),
+            "-o",
+            str(tmp_path / "suggested.npy"),
+            "-l",
+            str(learner_file),
+            "-b",
+            "[[0, 1], [0, 1]]",
+            "-a",
+            "EI",
+            "--device",
+            "cpu",
+            "--inequality-constraints",
+            "[[[0], [1.0], 0.5]]",
+            "--equality-constraints",
+            "[[[1], [1.0], 0.25]]",
+            "--nonlinear-inequality-constraints",
+            f"{constraint_script}:make_constraints",
+            "--nonlinear-mode",
+            "initialization-only",
+            "--nonlinear-initial-raw-samples",
+            "32",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    constraints = calls[0]["optimization_constraints"]
+    assert isinstance(constraints, AcquisitionOptimizationConstraints)
+    assert constraints.inequality_constraints == [([0], [1.0], 0.5)]
+    assert constraints.equality_constraints == [([1], [1.0], 0.25)]
+    assert len(constraints.nonlinear_inequality_constraints) == 1
+    assert constraints.nonlinear_mode == "initialization_only"
+    assert constraints.nonlinear_initial_raw_samples == 32
+
+
+def test_optimize_cli_rejects_non_integer_constraint_indices(single_fidelity_data_file, tmp_path):
+    learner_file = tmp_path / "learner.ckpt"
+    learner_file.write_text("placeholder")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        deepopt_cli,
+        [
+            "optimize",
+            "-i",
+            str(single_fidelity_data_file),
+            "-o",
+            str(tmp_path / "suggested.npy"),
+            "-l",
+            str(learner_file),
+            "-b",
+            "[[0, 1], [0, 1]]",
+            "-a",
+            "EI",
+            "--inequality-constraints",
+            "[[[1.9], [1.0], 0.5]]",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "indices must be integers" in result.output
+
+
+def test_optimize_cli_rejects_malformed_constraints(single_fidelity_data_file, tmp_path):
+    learner_file = tmp_path / "learner.ckpt"
+    learner_file.write_text("placeholder")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        deepopt_cli,
+        [
+            "optimize",
+            "-i",
+            str(single_fidelity_data_file),
+            "-o",
+            str(tmp_path / "suggested.npy"),
+            "-l",
+            str(learner_file),
+            "-b",
+            "[[0, 1], [0, 1]]",
+            "-a",
+            "EI",
+            "--inequality-constraints",
+            "[[[0], [1.0, 2.0], 0.5]]",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "same length" in result.output
 
 
 def test_conditional_option_is_ignored_when_dependency_missing(
