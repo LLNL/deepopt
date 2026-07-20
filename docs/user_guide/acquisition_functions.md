@@ -12,3 +12,48 @@ Knowledge gradient attempts to reduce EI's heavy exploitation by selecting a poi
 
 ## MaxValEntropy
 Max Value Entropy selects points to minimize its uncertainty about the optimal value. This indirect approach allows it to heavily favor exploration before zooming in on promising spots in the input space. Its information-theoretic foundation also easily extends to the multi-fidelity setting (a low-fidelity candidate is selected if it helps minimize uncertainty about the high-fidelity optimum).
+
+## Supported combinations
+
+| Feature | EI | NEI | KG | MaxValEntropy |
+| ------- | -- | --- | -- | ------------- |
+| Single-fidelity optimization | Yes | Yes | Yes | Yes |
+| Multi-fidelity optimization | No | No | Yes | Yes |
+| VaR/CVaR risk measures | Yes | Yes | Yes | No |
+| Linear constraints | Yes | Yes | Yes | Yes, with candidate-set filtering |
+| Nonlinear constraints | Yes | Yes | No | Single-fidelity only |
+
+Entropy acquisitions use a sampled candidate set before continuous optimization. Equality constraints are not supported for these candidate sets; use inequality or nonlinear constraints instead. Nonlinear constraints are not currently supported with KG. For nonlinear constraints, `initialization_only` mode filters optimizer starts but does not guarantee final feasibility.
+
+## Risk measures and input perturbations
+
+VaR and CVaR wrap the acquisition objective with input perturbations. The perturbation standard deviations are specified in original input units through `x_stddev` in the Python API or `--X-stddev` in the CLI. DeepOpt scales these values internally before calling BoTorch. For multi-fidelity runs, the fidelity-column standard deviation is set to zero so the risk transform does not change fidelity.
+
+```python
+model.optimize(
+    outfile="suggested_inputs.npy",
+    learner_file="learner_GP.ckpt",
+    acq_method="EI",
+    risk_measure="CVaR",
+    risk_level=0.8,
+    risk_n_deltas=128,
+    x_stddev=[0.02, 0.02, 0.02],
+)
+```
+
+You can also evaluate risk values at existing points from a self-describing checkpoint:
+
+```python
+from deepopt.models import load_deepopt_wrapper
+
+model = load_deepopt_wrapper("learner_GP.ckpt")
+values = model.get_cvar(
+    risk_level=0.8,
+    x_stddev=[0.02, 0.02, 0.02],
+    risk_n_deltas=128,
+)
+```
+
+## `propose_best`
+
+`propose_best=True` reserves the first returned candidate for the current posterior maximizer. DeepOpt then uses the selected acquisition function for the remaining `num_candidates - 1` points. In multi-fidelity optimization, this posterior maximizer is found at the target fidelity and the fidelity column is appended before saving candidates in original input units.

@@ -112,3 +112,18 @@ deepopt optimize \
 The referenced function must either be a constraint callable itself or return a callable/list of callables. A point is feasible when each callable returns a value `>= 0`. These callables receive candidate tensors in original input units.
 
 `--nonlinear-mode enforce` passes nonlinear constraints to BoTorch. With the pinned BoTorch optimizer this requires `batch_limit=1`; for multiple candidates DeepOpt uses sequential `q=1` optimizer calls where supported. `--nonlinear-mode initialization-only` only uses the nonlinear constraints to choose feasible initial conditions, preserving larger batch limits but not guaranteeing final candidate feasibility.
+
+A complete nonlinear constraint file can look like this:
+
+```python title="constraints.py"
+def make_constraints():
+    def inside_circle(X):
+        return 0.25 - ((X[..., 0] - 0.5) ** 2 + (X[..., 1] - 0.5) ** 2)
+
+    def above_floor(X):
+        return X[..., 2] - 0.1
+
+    return [inside_circle, above_floor]
+```
+
+The callable can return a tensor with batch dimensions; DeepOpt reduces all non-candidate dimensions with logical `all`. Nonlinear constraints are currently limited to single-fidelity optimization. They are not supported for multi-fidelity mixed optimization, fixed-feature subproblems, or KG. If DeepOpt cannot find feasible starts, increase `nonlinear_initial_raw_samples` or `nonlinear_initial_max_tries`, or relax the constraints.

@@ -97,6 +97,24 @@ class AcquisitionOptimizationSettings:
 class AcquisitionOptimizationConstraints:
     """
     Optional constraints and initialization controls for acquisition optimization.
+
+    Linear constraints are supplied in original input units as tuples of
+    ``(indices, coefficients, rhs)``. DeepOpt converts them to the scaled model
+    coordinates used by BoTorch, leaving the fidelity index unscaled in
+    multi-fidelity runs. Nonlinear inequality constraints are callables that
+    receive original-unit candidate tensors and return values where ``>= 0`` means
+    feasible. ``nonlinear_mode='enforce'`` passes nonlinear constraints to BoTorch;
+    ``'initialization_only'`` only uses them to seed feasible initial conditions.
+
+    :cvar inequality_constraints: Linear inequalities of the form ``sum(c_i x_i) >= rhs``.
+    :cvar equality_constraints: Linear equalities of the form ``sum(c_i x_i) == rhs``.
+    :cvar nonlinear_inequality_constraints: Callable nonlinear feasibility tests.
+    :cvar post_processing_func: Optional BoTorch post-processing function for candidates.
+    :cvar batch_initial_conditions: Optional original-unit initial conditions with shape
+        ``num_restarts x q x input_dim`` or ``num_restarts x input_dim``.
+    :cvar nonlinear_mode: ``'enforce'`` or ``'initialization_only'``.
+    :cvar nonlinear_initial_raw_samples: Optional raw sample count for nonlinear-feasible starts.
+    :cvar nonlinear_initial_max_tries: Number of attempts to find nonlinear-feasible starts.
     """
 
     inequality_constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]] = None
@@ -239,7 +257,11 @@ def load_deepopt_model(learner_file: str, device: str = "auto", verbose: bool = 
 
 class FidelityCostModel(DeterministicModel):
     """
-    The cost model for multi-fidelity runs.
+    Deterministic cost model for multi-fidelity acquisition utilities.
+
+    The last input column is interpreted as a fidelity index. During acquisition
+    optimization the index is rounded to the nearest integer and used to select
+    the corresponding entry from ``fidelity_weights``.
     """
 
     def __init__(self, fidelity_weights: np.ndarray):
@@ -479,13 +501,18 @@ class DeepoptBaseModel(ABC):
 
     def get_input_perturbation(self, risk_n_deltas: int, bounds: np.ndarray, X_stddev: np.ndarray) -> InputPerturbation:
         """
-        Get the input perturbation.
+        Build the BoTorch input transform used by VaR and CVaR objectives.
 
-        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
-        :param bounds: Scaled bounds for each input dimension
-        :param X_stddev: Scaled uncertainity in X (stddev) in each dimension
+        ``X_stddev`` must already be in the same scaled coordinates as ``bounds``.
+        Public APIs such as ``optimize``, ``get_var``, and ``get_cvar`` accept
+        standard deviations in original input units and scale them before calling
+        this helper. Multi-fidelity callers set the fidelity-column standard
+        deviation to zero so perturbations do not change fidelity.
 
-        :returns: A transform that adds the set of perturbations to the given input
+        :param risk_n_deltas: Number of quasi-Monte Carlo input perturbations.
+        :param bounds: Scaled bounds for each input dimension.
+        :param X_stddev: Scaled input standard deviations, one per input dimension.
+        :returns: A transform that adds sampled perturbations to query inputs.
         """
         assert len(X_stddev) == len(bounds.T), f"Expected {len(bounds.T)} values for X_stddev but recieved {len(X_stddev)}."
         input_pertubation = InputPerturbation(
@@ -824,6 +851,7 @@ class DeepoptBaseModel(ABC):
             rhs_value = float(rhs)
             scales = self.bounds[1, index_tensor] - self.bounds[0, index_tensor]
             offsets = self.bounds[0, index_tensor]
+            # Constraint coefficients are authored in original units, while BoTorch optimizes scaled inputs.
             if self.multi_fidelity:
                 fidelity_terms = index_tensor == self.input_dim - 1
                 scales = torch.where(fidelity_terms, torch.ones_like(scales), scales)
@@ -879,6 +907,7 @@ class DeepoptBaseModel(ABC):
                     "BoTorch requires batch_limit=1 when enforcing nonlinear inequality constraints; overriding batch_limit.",
                     RuntimeWarning,
                 )
+            # The BoTorch nonlinear-constraint optimizer requires one restart batch at a time.
             options["batch_limit"] = 1
         return options
 
@@ -896,6 +925,7 @@ class DeepoptBaseModel(ABC):
             return optimization_constraints.batch_initial_conditions
         raw_samples = optimization_constraints.nonlinear_initial_raw_samples or raw_samples
         raw_samples = max(raw_samples, num_restarts)
+        # Feasible starts keep initialization_only mode useful even when final optimization is unconstrained.
         seed = options.get("seed", self.random_seed)
         feasible_batches = []
         for attempt in range(optimization_constraints.nonlinear_initial_max_tries):
@@ -1420,26 +1450,27 @@ class DeepoptBaseModel(ABC):
         optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
     ) -> Tuple[Any, Any]:
         """
-        Get the candidates using the model loaded in with `load_model` and the acquisition method
-        requested by the user.
+        Generate scaled candidate tensors with the requested acquisition method.
 
-        :param model: The model loaded in by `load_model`.
-        :param acq_method: The acquisition method. Either 'EI', 'NEI', 'GIBBON', 'MaxValEntropy', or 'KG'
-        :param q: The number of candidates provided by the user (or the default value assigned
-            in Default)
-        :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
-            be determined by the `risk_measure` argument given by the user to the `deepopt optimize`
-            command.
-        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
-        :param fidelity_cost: A list of how expensive each fidelity should be seen as
-        :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
-            the model (at the expense of model complexity and performance).
-        :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
-            while the rest are acquired by the specified acquisition method. If `False`, acquire all points
-            with the acquisition method as usual.
+        Single-fidelity runs support ``EI``, ``NEI``, ``KG``, and ``MaxValEntropy``.
+        Multi-fidelity runs support ``KG``, ``MaxValEntropy``, and ``GIBBON`` through
+        mixed optimization over the last fidelity column. Candidate tensors returned
+        from this method are still in model coordinates; ``optimize`` converts them
+        back to original units before saving. Risk objectives may be used with EI,
+        NEI, and KG, but not MaxValEntropy. ``propose_best=True`` reserves the first
+        candidate for the current posterior maximizer and acquires the remaining
+        ``q - 1`` points with ``acq_method``.
 
-        :returns: A two element tuple containing a q x d-dim tensor of generated candidates
-            and an associated acquisition value.
+        :param model: The model loaded by ``load_model``.
+        :param acq_method: Acquisition method name.
+        :param q: Number of candidates to generate.
+        :param risk_objective: Optional BoTorch VaR/CVaR objective applied to posterior samples.
+        :param risk_n_deltas: Number of input perturbations used by the risk objective.
+        :param fidelity_cost: Cost weights indexed by rounded fidelity for multi-fidelity runs.
+        :param optimization_settings: Resolved or explicit acquisition optimizer settings.
+        :param propose_best: Whether to prepend the current posterior maximizer.
+        :param optimization_constraints: Optional linear/nonlinear optimization constraints.
+        :returns: ``(candidates, acq_value)`` in scaled model coordinates.
         """
 
         current_max = self.full_train_Y[self.full_train_X[:,-1]==(self.num_fidelities-1)].max(
@@ -1496,27 +1527,39 @@ class DeepoptBaseModel(ABC):
         nonlinear_initial_max_tries: int = 5,
     ) -> None:
         """
-        The function to process the `deepopt optimize` command.
+        Propose candidates from a trained checkpoint and save them as a NumPy array.
 
-        Here we'll use the model created by `learn` to produce new simulation points.
+        Candidates are optimized in scaled model coordinates and saved in original
+        input units. For multi-fidelity runs, the last column is the rounded fidelity
+        index and ``fidelity_cost`` supplies the relative cost for each fidelity.
+        Linear constraints and ``batch_initial_conditions`` are authored in original
+        input units and converted internally. Nonlinear constraints receive original
+        input units, use ``>= 0`` as feasible, and are limited to single-fidelity
+        optimization. Risk measures interpret ``x_stddev`` in original input units;
+        the fidelity perturbation is forced to zero for multi-fidelity runs.
 
-        :param outfile: The name of the file to save the proposed candidates in
-        :param learner_file: The name of the checkpoint file produced by `learn`
-        :param acq_method: The acquisition function. Single-fidelity options:
-            'KG', 'MaxValEntropy', 'EI', or 'NEI'. Multi-fidelity options: 'KG' or
-            'MaxValEntropy'
-        :param num_candidates: The number of candidates
-        :param fidelity_cost: List of costs for each fidelity
-        :param risk_measure: The risk measure to use. Options: 'CVaR' (Conditional Value-at-Risk)
-                or 'VaR' (Value-at-Risk).
-        :param risk_level: The risk level (a float between 0 and 1)
-        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
-        :param x_stddev: Uncertainty in X (stddev) in each dimension
-        :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
-            while the rest are acquired by the specified acquisition method. If `False`, acquire all points
-            with the acquisition method as usual. 
-        :param integer_fidelities: If `True`, converts fidelity column to integers when saving candidate .npy file.
-            Saved numpy array had dtype 'object' and requires `allow_pickle=True` option in `np.load` to read.
+        :param outfile: File path for the saved candidate ``.npy`` array.
+        :param learner_file: Checkpoint file produced by ``learn``.
+        :param acq_method: Single-fidelity options are ``KG``, ``MaxValEntropy``, ``EI``, or ``NEI``;
+            multi-fidelity options are ``KG`` or ``MaxValEntropy``.
+        :param num_candidates: Number of candidates to propose.
+        :param fidelity_cost: Cost weights for each fidelity.
+        :param risk_measure: Optional ``'CVaR'`` or ``'VaR'`` risk measure.
+        :param risk_level: Risk alpha level between 0 and 1.
+        :param risk_n_deltas: Number of input perturbations for the risk objective.
+        :param x_stddev: Input standard deviations in original units.
+        :param propose_best: Whether to prepend the current posterior maximizer.
+        :param integer_fidelities: If ``True``, save the fidelity column as integers using object dtype.
+        :param optimization_settings: Optional explicit acquisition optimizer settings.
+        :param optimization_constraints: Optional grouped optimization constraints.
+        :param inequality_constraints: Linear inequalities in original input units.
+        :param equality_constraints: Linear equalities in original input units.
+        :param nonlinear_inequality_constraints: Nonlinear feasibility callables.
+        :param post_processing_func: Optional BoTorch candidate post-processing function.
+        :param batch_initial_conditions: Optional original-unit optimizer initial conditions.
+        :param nonlinear_mode: ``'enforce'`` or ``'initialization_only'``.
+        :param nonlinear_initial_raw_samples: Optional raw samples for nonlinear-feasible starts.
+        :param nonlinear_initial_max_tries: Maximum attempts to find nonlinear-feasible starts.
         """
         optimization_settings = self._resolve_optimization_settings(optimization_settings)
         optimization_constraints = self._normalize_optimization_constraints(

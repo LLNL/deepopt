@@ -27,6 +27,20 @@ from deepopt.models import (
 
 
 def _parse_linear_constraints(value: Union[str, None], option_name: str) -> Union[List[Tuple[List[int], List[float], float]], None]:
+    """
+    Parse CLI JSON for BoTorch-style linear acquisition constraints.
+
+    The JSON value must be a list of constraints, where each constraint is
+    ``[indices, coefficients, rhs]``. Indices must be integers, coefficients and
+    ``rhs`` must be numeric, and the constraint is written in original input units.
+    Inequality constraints use ``sum(coefficients[i] * x[indices[i]]) >= rhs``;
+    equality constraints use the same left-hand side with equality.
+
+    :param value: JSON string supplied to the Click option, or ``None``.
+    :param option_name: Option name used in validation error messages.
+    :returns: Parsed constraints as ``(indices, coefficients, rhs)`` tuples, or ``None``.
+    :raises click.BadParameter: If the JSON structure or numeric types are invalid.
+    """
     if value is None:
         return None
     try:
@@ -54,6 +68,20 @@ def _parse_linear_constraints(value: Union[str, None], option_name: str) -> Unio
 
 
 def _load_nonlinear_constraints(reference: Union[str, None]) -> Union[List[Callable], None]:
+    """
+    Load trusted nonlinear inequality constraints from a local Python file.
+
+    ``reference`` must use ``path/to/file.py:function_name``. The named object may
+    be a constraint callable itself or a zero-argument factory returning a callable
+    or list of callables. Constraint callables receive candidate tensors in original
+    input units, and points are feasible when every callable returns values ``>= 0``.
+    The CLI maps ``--nonlinear-mode initialization-only`` to the API value
+    ``initialization_only`` after loading.
+
+    :param reference: Constraint loader reference, or ``None``.
+    :returns: A list of loaded constraint callables, or ``None``.
+    :raises click.BadParameter: If the reference cannot be loaded or does not produce callables.
+    """
     if reference is None:
         return None
     script_path, separator, function_name = reference.partition(":")

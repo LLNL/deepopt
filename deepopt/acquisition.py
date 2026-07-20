@@ -728,6 +728,12 @@ class qMultiFidelityMaxValueEntropy(qMaxValueEntropy):
 
     @property
     def cost_sampler(self):
+        """
+        Sampler used for cost-aware utility evaluation.
+
+        The sampler is lazily deep-copied from the fantasy sampler so cost samples do not mutate the base
+        fantasy sampler state when the expanded cost model has a different output or test-point shape.
+        """
         if self._cost_sampler is None:
             # Note: Using the deepcopy here is essential. Removing this poses a
             # problem if the base model and the cost model have a different number
