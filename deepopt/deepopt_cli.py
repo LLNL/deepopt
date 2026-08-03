@@ -520,6 +520,13 @@ def learn(
     default=5,
     show_default=True,
 )
+@click.option(
+    "--nonlinear-optimization-retries",
+    help="Additional retries after nonlinear constrained optimizer failure warnings.",
+    type=click.IntRange(min=0),
+    default=1,
+    show_default=True,
+)
 def optimize(
     infile,
     outfile,
@@ -546,6 +553,7 @@ def optimize(
     nonlinear_mode,
     nonlinear_initial_raw_samples,
     nonlinear_initial_max_tries,
+    nonlinear_optimization_retries,
 ) -> None:
     """
     Load in the model created by ``learn`` and use it to propose new simulation points.
@@ -600,6 +608,7 @@ def optimize(
         nonlinear_mode=nonlinear_mode.replace("-", "_"),
         nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
         nonlinear_initial_max_tries=nonlinear_initial_max_tries,
+        nonlinear_optimization_retries=nonlinear_optimization_retries,
     )
     if not any(
         getattr(optimization_constraints, key) is not None

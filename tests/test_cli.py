@@ -168,6 +168,8 @@ def test_optimize_cli_parses_constraints(monkeypatch, single_fidelity_data_file,
             "initialization-only",
             "--nonlinear-initial-raw-samples",
             "32",
+            "--nonlinear-optimization-retries",
+            "3",
         ],
     )
 
@@ -179,6 +181,7 @@ def test_optimize_cli_parses_constraints(monkeypatch, single_fidelity_data_file,
     assert len(constraints.nonlinear_inequality_constraints) == 1
     assert constraints.nonlinear_mode == "initialization_only"
     assert constraints.nonlinear_initial_raw_samples == 32
+    assert constraints.nonlinear_optimization_retries == 3
 
 
 def test_optimize_cli_rejects_non_integer_constraint_indices(single_fidelity_data_file, tmp_path):

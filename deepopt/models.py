@@ -115,6 +115,7 @@ class AcquisitionOptimizationConstraints:
     :cvar nonlinear_mode: ``'enforce'`` or ``'initialization_only'``.
     :cvar nonlinear_initial_raw_samples: Optional raw sample count for nonlinear-feasible starts.
     :cvar nonlinear_initial_max_tries: Number of attempts to find nonlinear-feasible starts.
+    :cvar nonlinear_optimization_retries: Additional retries after optimizer failure warnings.
     """
 
     inequality_constraints: Optional[List[Tuple[Sequence[int], Sequence[float], float]]] = None
@@ -125,6 +126,7 @@ class AcquisitionOptimizationConstraints:
     nonlinear_mode: str = "enforce"
     nonlinear_initial_raw_samples: Optional[int] = None
     nonlinear_initial_max_tries: int = 5
+    nonlinear_optimization_retries: int = 1
 
 
 
@@ -767,6 +769,7 @@ class DeepoptBaseModel(ABC):
         nonlinear_mode: str = "enforce",
         nonlinear_initial_raw_samples: Optional[int] = None,
         nonlinear_initial_max_tries: int = 5,
+        nonlinear_optimization_retries: int = 1,
     ) -> Optional[AcquisitionOptimizationConstraints]:
         direct_constraints = any(
             value is not None
@@ -791,11 +794,19 @@ class DeepoptBaseModel(ABC):
             nonlinear_mode=nonlinear_mode,
             nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
             nonlinear_initial_max_tries=nonlinear_initial_max_tries,
+            nonlinear_optimization_retries=nonlinear_optimization_retries,
         )
         if constraints.nonlinear_mode not in {"enforce", "initialization_only"}:
             raise ValueError("nonlinear_mode must be 'enforce' or 'initialization_only'.")
         if constraints.nonlinear_initial_max_tries <= 0:
             raise ValueError("nonlinear_initial_max_tries must be positive.")
+        if (
+            isinstance(constraints.nonlinear_optimization_retries, (bool, np.bool_))
+            or not isinstance(constraints.nonlinear_optimization_retries, (int, np.integer))
+            or constraints.nonlinear_optimization_retries < 0
+        ):
+            raise ValueError("nonlinear_optimization_retries must be a non-negative integer.")
+        nonlinear_optimization_retries = int(constraints.nonlinear_optimization_retries)
         nonlinear_constraints = self._normalize_nonlinear_constraints(constraints.nonlinear_inequality_constraints)
         if nonlinear_constraints and self.multi_fidelity:
             raise NotImplementedError("Nonlinear inequality constraints are only supported for single-fidelity optimization.")
@@ -808,6 +819,7 @@ class DeepoptBaseModel(ABC):
             nonlinear_mode=constraints.nonlinear_mode,
             nonlinear_initial_raw_samples=constraints.nonlinear_initial_raw_samples,
             nonlinear_initial_max_tries=constraints.nonlinear_initial_max_tries,
+            nonlinear_optimization_retries=nonlinear_optimization_retries,
         )
 
     def _normalize_nonlinear_constraints(
@@ -924,16 +936,17 @@ class DeepoptBaseModel(ABC):
         if optimization_constraints.batch_initial_conditions is not None:
             return optimization_constraints.batch_initial_conditions
         raw_samples = optimization_constraints.nonlinear_initial_raw_samples or raw_samples
-        raw_samples = max(raw_samples, num_restarts)
+        required_points = num_restarts * q
+        raw_samples = max(raw_samples, required_points)
         # Feasible starts keep initialization_only mode useful even when final optimization is unconstrained.
         seed = options.get("seed", self.random_seed)
-        feasible_batches = []
+        feasible_points = []
         for attempt in range(optimization_constraints.nonlinear_initial_max_tries):
             if optimization_constraints.inequality_constraints or optimization_constraints.equality_constraints:
                 samples = gen_batch_initial_conditions(
                     acq_function=acq_function,
                     bounds=bounds,
-                    q=q,
+                    q=1,
                     num_restarts=raw_samples,
                     raw_samples=raw_samples,
                     options={**options, "seed": seed + attempt},
@@ -941,24 +954,26 @@ class DeepoptBaseModel(ABC):
                     equality_constraints=optimization_constraints.equality_constraints,
                 )
             else:
-                samples = draw_sobol_samples(bounds=bounds.cpu(), n=raw_samples, q=q, seed=seed + attempt).to(self.device)
+                samples = draw_sobol_samples(bounds=bounds.cpu(), n=raw_samples, q=1, seed=seed + attempt).to(self.device)
             feasible = self._nonlinear_feasible_mask(samples, optimization_constraints.nonlinear_inequality_constraints)
             if feasible.any():
-                feasible_batches.append(samples[feasible])
-            if feasible_batches and sum(batch.shape[0] for batch in feasible_batches) >= num_restarts:
+                feasible_points.append(samples[feasible].squeeze(-2))
+            if feasible_points and sum(points.shape[0] for points in feasible_points) >= required_points:
                 break
-        if not feasible_batches:
+        if not feasible_points:
             raise ValueError("Could not find nonlinear-feasible initial conditions.")
-        feasible_samples = torch.cat(feasible_batches, dim=0)
-        if feasible_samples.shape[0] < num_restarts:
+        feasible_samples = torch.cat(feasible_points, dim=0)
+        if feasible_samples.shape[0] < required_points:
             raise ValueError(
                 "Not enough nonlinear-feasible initial conditions found; increase nonlinear_initial_raw_samples "
                 "or nonlinear_initial_max_tries, or relax the constraints."
             )
+        num_batches = feasible_samples.shape[0] // q
+        initial_batches = feasible_samples[: num_batches * q].reshape(num_batches, q, bounds.shape[-1])
         with torch.no_grad():
-            values = acq_function(feasible_samples).reshape(-1)
+            values = acq_function(initial_batches).reshape(-1)
         top_indices = torch.topk(values, k=num_restarts).indices
-        return feasible_samples[top_indices]
+        return initial_batches[top_indices]
 
     def _filter_candidate_set_for_constraints(
         self,
@@ -998,6 +1013,20 @@ class DeepoptBaseModel(ABC):
             feasible &= constraint_feasible.to(samples.device)
         return feasible
 
+    @staticmethod
+    def _is_retry_suppressed_optimization_warning(warning_message: warnings.WarningMessage) -> bool:
+        message = str(warning_message.message)
+        return (
+            "batch_initial_conditions" in message
+            and "retried" in message
+            and ("Optimization failed" in message or "scipy.optimize.minimize" in message)
+        )
+
+    @staticmethod
+    def _reemit_warnings(caught_warnings: Sequence[warnings.WarningMessage]) -> None:
+        for caught in caught_warnings:
+            warnings.warn(caught.message, caught.category)
+
     def _constraint_kwargs_for_call(
         self,
         acq_function: Any,
@@ -1012,7 +1041,9 @@ class DeepoptBaseModel(ABC):
             return {}, options
         if not self._has_nonlinear_constraints(optimization_constraints):
             return self._optimization_constraint_kwargs(optimization_constraints), options
+        seed = options.get("seed", self.random_seed)
         options = self._make_constrained_acq_options(options["batch_limit"], options["maxiter"], optimization_constraints)
+        options["seed"] = seed
         batch_initial_conditions = self._make_feasible_nonlinear_initial_conditions(
             acq_function=acq_function,
             bounds=bounds,
@@ -1042,17 +1073,48 @@ class DeepoptBaseModel(ABC):
             if isinstance(kwargs["acq_function"], qKnowledgeGradient):
                 raise NotImplementedError("Nonlinear constraints with KG currently require num_candidates=1.")
             return self._optimize_acqf_nonlinear_sequential(optimization_constraints, **kwargs)
-        constraint_kwargs, options = self._constraint_kwargs_for_call(
-            acq_function=kwargs["acq_function"],
-            bounds=kwargs["bounds"],
-            q=kwargs["q"],
-            num_restarts=kwargs["num_restarts"],
-            raw_samples=kwargs["raw_samples"],
-            options=kwargs["options"],
-            optimization_constraints=optimization_constraints,
-        )
-        kwargs["options"] = options
-        return self._optimize_acqf(**kwargs, **constraint_kwargs)
+        attempts = 1
+        if optimization_constraints.batch_initial_conditions is None:
+            attempts += optimization_constraints.nonlinear_optimization_retries
+        base_options = dict(kwargs["options"])
+        base_seed = base_options.get("seed", self.random_seed)
+        for attempt in range(attempts):
+            attempt_options = dict(base_options)
+            attempt_options["seed"] = base_seed + attempt * optimization_constraints.nonlinear_initial_max_tries
+            constraint_kwargs, options = self._constraint_kwargs_for_call(
+                acq_function=kwargs["acq_function"],
+                bounds=kwargs["bounds"],
+                q=kwargs["q"],
+                num_restarts=kwargs["num_restarts"],
+                raw_samples=kwargs["raw_samples"],
+                options=attempt_options,
+                optimization_constraints=optimization_constraints,
+            )
+            call_kwargs = dict(kwargs)
+            call_kwargs["options"] = options
+            with warnings.catch_warnings(record=True) as caught_warnings:
+                warnings.simplefilter("always")
+                result = self._optimize_acqf(**call_kwargs, **constraint_kwargs)
+            retry_warning = any(
+                self._is_retry_suppressed_optimization_warning(warning_message)
+                for warning_message in caught_warnings
+            )
+            if retry_warning and attempt < attempts - 1:
+                self._reemit_warnings(
+                    [
+                        warning_message
+                        for warning_message in caught_warnings
+                        if not self._is_retry_suppressed_optimization_warning(warning_message)
+                    ]
+                )
+                warnings.warn(
+                    "Retrying nonlinear acquisition optimization with regenerated feasible initial conditions.",
+                    RuntimeWarning,
+                )
+                continue
+            self._reemit_warnings(caught_warnings)
+            return result
+        raise RuntimeError("Unreachable nonlinear acquisition optimization retry state.")
 
     def _optimize_acqf_nonlinear_sequential(
         self,
@@ -1525,6 +1587,7 @@ class DeepoptBaseModel(ABC):
         nonlinear_mode: str = "enforce",
         nonlinear_initial_raw_samples: Optional[int] = None,
         nonlinear_initial_max_tries: int = 5,
+        nonlinear_optimization_retries: int = 1,
     ) -> None:
         """
         Propose candidates from a trained checkpoint and save them as a NumPy array.
@@ -1560,6 +1623,7 @@ class DeepoptBaseModel(ABC):
         :param nonlinear_mode: ``'enforce'`` or ``'initialization_only'``.
         :param nonlinear_initial_raw_samples: Optional raw samples for nonlinear-feasible starts.
         :param nonlinear_initial_max_tries: Maximum attempts to find nonlinear-feasible starts.
+        :param nonlinear_optimization_retries: Additional retries after nonlinear optimizer failure warnings.
         """
         optimization_settings = self._resolve_optimization_settings(optimization_settings)
         optimization_constraints = self._normalize_optimization_constraints(
@@ -1572,6 +1636,7 @@ class DeepoptBaseModel(ABC):
             nonlinear_mode=nonlinear_mode,
             nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
             nonlinear_initial_max_tries=nonlinear_initial_max_tries,
+            nonlinear_optimization_retries=nonlinear_optimization_retries,
         )
         self._configure_torch_threads(optimization_settings)
         print(
