@@ -36,7 +36,7 @@ Modern DeepOpt checkpoints are self-describing, so `optimize` can reload the tra
 deepopt optimize -l learner_GP.ckpt -o suggested_inputs.npy -a EI
 ```
 
-Important options:
+Core options:
 
 | Option | Meaning |
 | ------ | ------- |
@@ -45,8 +45,10 @@ Important options:
 | `-a`, `--acq-method` | Acquisition method: `EI`, `NEI`, `KG`, or `MaxValEntropy`. |
 | `-q`, `--num-candidates` | Number of candidates to propose. |
 | `-c`, `--config-file` | Optional optimize-time config overrides. |
+| `-r`, `--random-seed` | Random seed for candidate generation when using legacy checkpoints. |
+| `-d`, `--device` | `auto`, `cpu`, `gpu`, or `cuda`. |
+| `-v`, `--verbose` | Print model evaluation and fantasy-training details. |
 | `--propose-best` | Use the first candidate for the current surrogate posterior maximizer. |
-| `--integer-fidelities` | Save the multi-fidelity fidelity column as integers. |
 
 Legacy checkpoints without `deepopt_checkpoint` metadata still require the original training data, bounds, and model type:
 
@@ -75,7 +77,7 @@ optimization:
 deepopt optimize -l learner_GP.ckpt -o suggested_inputs.npy -a EI -c optimize.yaml
 ```
 
-See [Configuration Settings](configuration.md#optimization-settings) for optimization profiles and thread settings.
+See [Configuration Settings](configuration.md#optimization-settings) for optimization profiles, thread settings, and nonlinear constraint control settings.
 
 ## Multi-fidelity optimization
 
@@ -97,7 +99,13 @@ deepopt optimize \
   --integer-fidelities
 ```
 
-`--fidelity-cost` must contain one cost per fidelity. DeepOpt rounds the candidate fidelity column before indexing this list.
+| Option | Meaning |
+| ------ | ------- |
+| `--multi-fidelity` | Legacy-checkpoint optimize flag indicating that the last input column is fidelity. |
+| `--fidelity-cost` | JSON list with one cost per fidelity. |
+| `--integer-fidelities` | Save the multi-fidelity fidelity column as integers. |
+
+DeepOpt rounds the candidate fidelity column before indexing `--fidelity-cost`.
 
 ## Risk-aware optimization
 
@@ -114,11 +122,18 @@ deepopt optimize \
   --X-stddev '[0.02, 0.02, 0.02]'
 ```
 
-`--X-stddev` is specified in original input units. For multi-fidelity optimization, the fidelity-column perturbation is forced to zero.
+| Option | Meaning |
+| ------ | ------- |
+| `--risk-measure` | `VaR` or `CVaR`. |
+| `--risk-level` | Risk level in `(0, 1)`. |
+| `--risk-n-deltas` | Number of input perturbations sampled for the risk objective. |
+| `--X-stddev` | JSON list of input standard deviations in original input units, one per input dimension. |
 
-## Linear constraints
+For multi-fidelity optimization, the fidelity-column perturbation is forced to zero.
 
-Linear constraints are JSON lists of `[indices, coefficients, rhs]` entries in original input units.
+## Constraints
+
+Linear constraints are JSON lists of `[indices, coefficients, rhs]` entries in original input units:
 
 ```bash
 deepopt optimize \
@@ -129,18 +144,7 @@ deepopt optimize \
   --equality-constraints '[[[2], [1.0], 0.5]]'
 ```
 
-Inequalities use `sum(coefficients[i] * x[indices[i]]) >= rhs`. Equalities use the same left-hand side with `== rhs`. Constraint indices must be integers. DeepOpt converts constraints from original input units into the scaled optimizer coordinates internally.
-
-## Nonlinear constraints
-
 Nonlinear constraints are loaded from trusted local Python files:
-
-```python title="constraints.py"
-def make_constraints():
-    def inside_circle(X):
-        return 0.25 - ((X[..., 0] - 0.5) ** 2 + (X[..., 1] - 0.5) ** 2)
-    return [inside_circle]
-```
 
 ```bash
 deepopt optimize \
@@ -151,13 +155,16 @@ deepopt optimize \
   --nonlinear-mode enforce
 ```
 
-The named function can be a constraint callable or a zero-argument factory returning a callable or list of callables. Constraint callables receive candidate tensors in original input units. A candidate is feasible when every constraint returns values `>= 0`.
+Constraint options:
 
-`--nonlinear-mode enforce` passes nonlinear constraints to BoTorch and forces `batch_limit=1`. For multiple candidates, DeepOpt uses sequential `q=1` optimization where supported. `--nonlinear-mode initialization-only` uses the constraints only to find feasible initial conditions, so final candidates are not guaranteed feasible.
+| Option | Meaning |
+| ------ | ------- |
+| `--inequality-constraints` | JSON list of linear inequality constraints. |
+| `--equality-constraints` | JSON list of linear equality constraints. |
+| `--nonlinear-inequality-constraints` | Trusted Python constraint loader in `path/to/file.py:function_name` form. |
+| `--nonlinear-mode` | `enforce` or `initialization-only`; omitted flags fall back to `optimization.nonlinear_mode`. |
+| `--nonlinear-initial-raw-samples` | Raw samples used when searching for nonlinear-feasible initial conditions. |
+| `--nonlinear-initial-max-tries` | Maximum attempts to find nonlinear-feasible initial conditions; omitted flags fall back to config. |
+| `--nonlinear-optimization-retries` | Additional retries after nonlinear constrained optimizer warnings; omitted flags fall back to config. |
 
-Current limitations:
-
-- Nonlinear constraints are single-fidelity only.
-- Nonlinear constraints are not supported for multi-fidelity mixed optimization or fixed-feature subproblems.
-- Nonlinear constraints are not currently supported with `KG`.
-- Equality constraints are not supported for entropy acquisition candidate sets.
+See [Candidate Generation](candidate_generation.md) for constraint semantics, config-key equivalents, and current limitations.

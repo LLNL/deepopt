@@ -12,7 +12,7 @@ Easily bring Bayesian optimization to your workflows with DeepOpt!
 
 ## Why DeepOpt?
 
-DeepOpt is a powerful and versatile Bayesian optimization framework that provides users with the flexibility to choose between Gaussian process (GP) and neural network (NN) surrogates. This flexibility empowers users to select the most suitable surrogate model for their specific optimization problem, taking into account factors such as the complexity of the objective function and the available computational resources.
+DeepOpt is a powerful and versatile Bayesian optimization framework that provides users with the flexibility to choose between Gaussian process (`GP`) and neural network (`delUQ` and `nnEnsemble`) surrogates. This flexibility empowers users to select the most suitable surrogate model for their specific optimization problem, taking into account factors such as the complexity of the objective function and the available computational resources.
 
 ## Getting Started with DeepOpt
 
@@ -22,7 +22,7 @@ Install deepopt with:
 pip install deepopt
 ```
 
-See the [Installation page](./user_guide/installation.md) for more installation instructions. The [CLI reference](./user_guide/cli.md) lists all `deepopt learn` and `deepopt optimize` options, and the [checkpoint guide](./user_guide/checkpoints.md) explains how saved learners can be reloaded.
+See the [Installation page](./user_guide/installation.md) for more installation instructions. The [CLI reference](./user_guide/cli.md) lists all `deepopt learn` and `deepopt optimize` options, [Configuration](./user_guide/configuration.md) covers YAML/JSON settings, [Candidate Generation](./user_guide/candidate_generation.md) covers constraints and risk-aware proposals, [Acquisition Functions](./user_guide/acquisition_functions.md) summarizes supported acquisition methods, and the [checkpoint guide](./user_guide/checkpoints.md) explains how saved learners can be reloaded.
 
 The DeepOpt library requires initial data so choose an objective function and "simulate" some initial data:
 

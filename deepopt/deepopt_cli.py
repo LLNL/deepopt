@@ -318,7 +318,11 @@ def learn(
     multi_fidelity,
 ) -> None:
     """
-    Train a model on a dataset and save that model to an output file.
+    Train a surrogate from a NumPy ``.npz`` dataset and save a checkpoint.
+
+    Training files must contain ``X`` and ``y`` arrays. Bounds are supplied as
+    JSON in original input units. In multi-fidelity mode, the last input column
+    is interpreted as an integer fidelity index.
     """
     bounds = np.array(json.loads(bounds),dtype=np.float32).T
 
@@ -503,10 +507,8 @@ def learn(
 )
 @click.option(
     "--nonlinear-mode",
-    help="How to use nonlinear constraints.",
+    help="How to use nonlinear constraints. Defaults to optimization.nonlinear_mode.",
     type=click.Choice(["enforce", "initialization-only"]),
-    default="enforce",
-    show_default=True,
 )
 @click.option(
     "--nonlinear-initial-raw-samples",
@@ -515,17 +517,13 @@ def learn(
 )
 @click.option(
     "--nonlinear-initial-max-tries",
-    help="Maximum attempts to find nonlinear-feasible initial conditions.",
+    help="Maximum attempts to find nonlinear-feasible initial conditions. Defaults to optimization.nonlinear_initial_max_tries.",
     type=click.INT,
-    default=5,
-    show_default=True,
 )
 @click.option(
     "--nonlinear-optimization-retries",
-    help="Additional retries after nonlinear constrained optimizer failure warnings.",
+    help="Additional retries after nonlinear constrained optimizer failure warnings. Defaults to optimization.nonlinear_optimization_retries.",
     type=click.IntRange(min=0),
-    default=1,
-    show_default=True,
 )
 def optimize(
     infile,
@@ -556,11 +554,13 @@ def optimize(
     nonlinear_optimization_retries,
 ) -> None:
     """
-    Load in the model created by ``learn`` and use it to propose new simulation points.
+    Load a trained checkpoint and propose new simulation points.
 
     Self-describing checkpoints provide their own training data, bounds, model type,
     and config settings. Legacy checkpoints still require JSON-encoded ``--bounds``
-    and the original ``--infile``.
+    and the original ``--infile``. Risk, linear constraints, and nonlinear
+    constraints are specified in original input units. Omitted nonlinear control
+    flags fall back to values in the ``optimization`` config section.
     """
     checkpoint_metadata = get_checkpoint_metadata(learner_file)
     if checkpoint_metadata is None:
@@ -605,7 +605,7 @@ def optimize(
         inequality_constraints=_parse_linear_constraints(inequality_constraints, "--inequality-constraints"),
         equality_constraints=_parse_linear_constraints(equality_constraints, "--equality-constraints"),
         nonlinear_inequality_constraints=_load_nonlinear_constraints(nonlinear_inequality_constraints),
-        nonlinear_mode=nonlinear_mode.replace("-", "_"),
+        nonlinear_mode=nonlinear_mode.replace("-", "_") if nonlinear_mode is not None else None,
         nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
         nonlinear_initial_max_tries=nonlinear_initial_max_tries,
         nonlinear_optimization_retries=nonlinear_optimization_retries,

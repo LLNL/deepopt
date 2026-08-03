@@ -249,6 +249,34 @@ def test_optimization_settings_resolve_profile_with_overrides(single_fidelity_da
     assert opt_settings.torch_num_threads == 3
 
 
+def test_optimization_settings_resolve_nonlinear_controls(single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    settings.set_setting(
+        "optimization",
+        {
+            "profile": "fast",
+            "nonlinear_mode": "initialization-only",
+            "nonlinear_initial_raw_samples": 64,
+            "nonlinear_initial_max_tries": 2,
+            "nonlinear_optimization_retries": 0,
+        },
+    )
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    model = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+
+    opt_settings = model._resolve_optimization_settings()
+
+    assert opt_settings.nonlinear_mode == "initialization_only"
+    assert opt_settings.nonlinear_initial_raw_samples == 64
+    assert opt_settings.nonlinear_initial_max_tries == 2
+    assert opt_settings.nonlinear_optimization_retries == 0
+
+
 def test_auto_torch_threads_use_all_small_allocations_and_fraction_large(monkeypatch):
     monkeypatch.setattr(DeepoptBaseModel, "_available_cpu_count", staticmethod(lambda: 8))
     assert DeepoptBaseModel._resolve_auto_torch_num_threads(0.8) == 8
@@ -283,6 +311,10 @@ def test_configure_torch_threads_respects_auto_and_explicit(monkeypatch, single_
             torch_num_threads="auto",
             torch_num_threads_fraction=0.7,
             torch_num_interop_threads=2,
+            nonlinear_mode="enforce",
+            nonlinear_initial_raw_samples=None,
+            nonlinear_initial_max_tries=5,
+            nonlinear_optimization_retries=1,
         )
     )
 
@@ -705,8 +737,55 @@ def test_nonlinear_optimization_retries_must_be_non_negative(single_fidelity_dat
         )
 
 
-def test_optimize_accepts_direct_nonlinear_optimization_retries(monkeypatch, single_fidelity_data_file, tmp_path):
+def test_optimize_uses_configured_nonlinear_controls(monkeypatch, single_fidelity_data_file, tmp_path):
     settings = ConfigSettings("GP")
+    settings.set_setting(
+        "optimization",
+        {
+            "nonlinear_mode": "initialization-only",
+            "nonlinear_initial_raw_samples": 16,
+            "nonlinear_initial_max_tries": 2,
+            "nonlinear_optimization_retries": 0,
+        },
+    )
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    class FakeModel:
+        def eval(self):
+            return None
+
+    def fake_get_candidates(**kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.2, 0.3]]), torch.tensor(1.0)
+
+    monkeypatch.setattr(wrapper, "load_model", lambda learner_file: FakeModel())
+    monkeypatch.setattr(wrapper, "_configure_torch_threads", lambda settings: None)
+    monkeypatch.setattr(wrapper, "get_candidates", fake_get_candidates)
+
+    wrapper.optimize(
+        outfile=str(tmp_path / "candidates.npy"),
+        learner_file="learner.ckpt",
+        acq_method="EI",
+        nonlinear_inequality_constraints=[lambda X: X[..., 0]],
+    )
+
+    constraints = captured["optimization_constraints"]
+    assert constraints.nonlinear_mode == "initialization_only"
+    assert constraints.nonlinear_initial_raw_samples == 16
+    assert constraints.nonlinear_initial_max_tries == 2
+    assert constraints.nonlinear_optimization_retries == 0
+
+
+def test_optimize_direct_nonlinear_controls_override_config(monkeypatch, single_fidelity_data_file, tmp_path):
+    settings = ConfigSettings("GP")
+    settings.set_setting("optimization", {"nonlinear_optimization_retries": 3})
     bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
     wrapper = GPModel(
         data_file=str(single_fidelity_data_file),

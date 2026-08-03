@@ -23,7 +23,7 @@ Max Value Entropy selects points to minimize its uncertainty about the optimal v
 | Linear constraints | Yes | Yes | Yes | Yes, with candidate-set filtering |
 | Nonlinear constraints | Yes | Yes | No | Single-fidelity only |
 
-Entropy acquisitions use a sampled candidate set before continuous optimization. Equality constraints are not supported for these candidate sets; use inequality or nonlinear constraints instead. Nonlinear constraints are not currently supported with KG. For nonlinear constraints, `initialization_only` mode filters optimizer starts but does not guarantee final feasibility.
+`KG` and entropy-style acquisition functions use the lower-budget optimization profile settings because they are more expensive. Entropy acquisitions use a sampled candidate set before continuous optimization. Equality constraints are not supported for these candidate sets; use inequality or nonlinear constraints instead. Nonlinear constraints are not currently supported with KG. For nonlinear constraints, `initialization_only` mode filters optimizer starts but does not guarantee final feasibility. See [Candidate Generation](candidate_generation.md) for constraint syntax, risk options, and `propose_best` behavior.
 
 ## Risk measures and input perturbations
 
@@ -56,4 +56,4 @@ values = model.get_cvar(
 
 ## `propose_best`
 
-`propose_best=True` reserves the first returned candidate for the current posterior maximizer. DeepOpt then uses the selected acquisition function for the remaining `num_candidates - 1` points. In multi-fidelity optimization, this posterior maximizer is found at the target fidelity and the fidelity column is appended before saving candidates in original input units.
+`propose_best=True` reserves the first returned candidate for the current posterior maximizer. DeepOpt then uses the selected acquisition function for the remaining `num_candidates - 1` points. In multi-fidelity optimization, this posterior maximizer is found at the target fidelity and the fidelity column is appended before saving candidates in original input units. See [Candidate Generation](candidate_generation.md#propose_best) for CLI usage.

@@ -30,8 +30,7 @@ python generate_simulation_inputs.py
 ```
 
 ### Default neural network
-DeepOpt currently supports the ensemble method for uncertainty quantification with neural networks. The naming convention of the model reflects this, so to use neural networks, we set the `model_type` to "nnEnsemble" and the mode class is called `NNEnsembleModel`.
-<!-- Neural networks in DeepOpt use the ["delta-UQ"](https://arxiv.org/abs/2110.02197) method for uncertainty quantification. The naming conventions reflect this, so to use neural networks, we set the `model_type` to "delUQ" and the model class is called `DelUQModel`. -->
+DeepOpt supports three model type strings: `GP` maps to `GPModel`, `delUQ` maps to `DelUQModel`, and `nnEnsemble` maps to `NNEnsembleModel`. This tutorial uses the neural-network ensemble model, so we set `model_type` to `nnEnsemble`.
 
 From here we can either use the DeepOpt API or we can use the DeepOpt CLI.
 
@@ -120,7 +119,7 @@ python -c "import numpy as np; print(np.load('suggested_inputs.npy'))"
 ```
 
 ### Changing the neural network configuration
-Simply create a configuration yaml file with the desired entries (available settings described [here](configuration.md)). Training settings are loaded when you construct the model configuration, and optimize-time settings can be provided through an `optimization:` section in the same file format.
+Simply create a configuration yaml file with the desired entries (available settings described [here](configuration.md)). Training settings are loaded when you construct the model configuration, and optimize-time settings can be provided through an `optimization:` section in the same file format. The `delUQ` model type is also available as an alternative neural-network surrogate.
 
 === "DeepOpt API"
     ```py title="run_deepopt.py" linenums="11"
@@ -443,6 +442,77 @@ The generated figure should look like this: ![Multi-fidelity optimization of two
 
 The plot shows a running max in orange that converges to the objective maximum (-1 in this example), while individual proposals are a mix of low and high fidelity candidates. Note that the low fidelity maximum here is higher than the high fidelity one, but we are only interested in finding the latter.
 
+## Tutorial: Constrained candidate generation
+
+DeepOpt can impose linear and nonlinear constraints while proposing candidates. Linear constraints are JSON lists of `[indices, coefficients, rhs]` entries in original input units:
+
+```bash
+deepopt optimize \
+  -l learner_GP.ckpt \
+  -o suggested_inputs.npy \
+  -a EI \
+  --inequality-constraints '[[[0, 1], [1.0, -1.0], 0.0]]'
+```
+
+This example enforces `x[0] - x[1] >= 0`.
+
+Nonlinear constraints are loaded from trusted local Python code. A constraint is feasible where it returns values `>= 0`:
+
+```python title="constraints.py"
+def make_constraints():
+    def inside_circle(X):
+        return 0.25 - ((X[..., 0] - 0.5) ** 2 + (X[..., 1] - 0.5) ** 2)
+
+    return [inside_circle]
+```
+
+```bash
+deepopt optimize \
+  -l learner_GP.ckpt \
+  -o suggested_inputs.npy \
+  -a EI \
+  --nonlinear-inequality-constraints constraints.py:make_constraints \
+  --nonlinear-mode enforce
+```
+
+Nonlinear control settings can also be supplied through optimize-time config:
+
+```yaml title="optimize_constraints.yaml"
+optimization:
+  profile: fast
+  nonlinear_mode: initialization-only
+  nonlinear_initial_raw_samples: 2048
+  nonlinear_initial_max_tries: 10
+  nonlinear_optimization_retries: 2
+```
+
+```bash
+deepopt optimize \
+  -l learner_GP.ckpt \
+  -o suggested_inputs.npy \
+  -a EI \
+  -c optimize_constraints.yaml \
+  --nonlinear-inequality-constraints constraints.py:make_constraints
+```
+
+See [Candidate Generation](candidate_generation.md) for the full constraint syntax, config-key equivalents, and current limitations.
+
+## Tutorial: Optimize-time settings
+
+Optimization profiles can be changed without retraining a self-describing checkpoint:
+
+```yaml title="optimize.yaml"
+optimization:
+  profile: fast
+  batch_limit_high: 6
+```
+
+```bash
+deepopt optimize -l learner_GP.ckpt -o suggested_inputs.npy -a EI -c optimize.yaml
+```
+
+See [Configuration Settings](configuration.md#optimization-settings) for all optimize-time settings.
+
 ## Tutorial: Risk-averse optimization
 !!! note
 
@@ -454,4 +524,4 @@ The available risk measures are VaR (Value-at-Risk) and CVaR (Conditional Value-
 
 `risk_n_deltas` sets the number of samples to draw for input perturbations (more accuracy and longer run time for larger values). 
 
-`x_stddev` sets the size of the input perturbations in each dimension (can provide a list to specify dimension-by-dimension or a scalar to set the same pertrubation for all inputs).
+`x_stddev` sets the size of the input perturbations in original input units. Provide one standard deviation per input dimension. In multi-fidelity optimization, DeepOpt sets the fidelity-column perturbation to zero internally.

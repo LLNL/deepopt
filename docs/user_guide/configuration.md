@@ -2,38 +2,49 @@
 
 !!! note
 
-    Model training hyperparameters are only configurable for nnEnsemble and delUQ models; GP model training runs as-is. Optimization settings apply to all model types.
+    Model training hyperparameters are only configurable for `nnEnsemble` and `delUQ` models; GP model training runs as-is. Optimization settings apply to all model types.
 
-The DeepOpt library allows users to define custom configurations for training your model and conducting Bayesian optimization. To ensure a flexible and user-friendly experience, DeepOpt supports configuration through YAML and JSON files. This guide is designed to walk you through the available options and best practices for setting up your configuration files.
+DeepOpt supports YAML and JSON configuration files. Model-training settings are merged over model-specific defaults, and candidate-generation settings live under a top-level `optimization:` section.
 
 ## The Base Configuration Options
 
-There are several configuration options for nnEnsemble and delUQ models that can be adjusted via a configuration file. Below is a table containing each of these options, a description of what they do, and their default values:
+The following options configure neural-network surrogate training for `nnEnsemble` and `delUQ` models.
 
-| Option           | Description | Default   |
-| ------------     | ----------- | -------   |
-| n_estimators     | The number of neural networks to use in a NN ensemble model (nnEnsemble only). | 100     |
-| ff               | To use "Fourier features" set this to True (otherwise False). When using Fourier features, a Fourier transform with learnable frequencies is implemented prior to the neural network layer. The number of such frequencies is set by the `mapping_size` parameter in the configuration file. Using Fourier features can help the network better learn small-scale features in the data without smearing them out.        | True      |
-| activation       | The activation function to use. Currently supported activations are "relu", "tanh", "identity", and "siren". The "identity" activation will remove any non-linearity in the network, reducing the surrogate to linear regression. The "siren" activaton uses a sine function and initializes the layer weights differently than usual. For more details see [the SIREN paper.](https://arxiv.org/abs/2006.09661)        | relu      |
-| w0 | The "w0" parameter to use for initializing weights in a SIREN network. The weight matrix in each layers is w0*W, where W is initalized uniformly on -1/input_dim to 1/input_dim in the first layer and uniformly on -sqrt(6/layer_dim)/w0 to sqrt(6/layer_dim)/w0 in all other layers. | 30 |
-| n_layers         | The total number of layers in the neural network. This includes the first and last layer, so `n_layers=4` will have 2 hidden layers.        | 4         |
-| hidden_dim       | The number of neurons in each hidden layer (width of the network).        | 128       |
-| mapping_size     | The number of Fourier frequencies to learn when using Fourier features        | 128       |
-| dropout          | Whether to use dropout regularization (True) or not (False)        | True      |
-| dropout_prob     | When using `dropout`, this sets the probability of dropping a neuron.        | 0.2       |
-| activation_first | When `dropout` is `True`, this sets whether neurons are dropped before or after applying the activation function (it has no effect of `dropout` is `False`). If `True`, the activation function is applied first followed by batchnorm (if `batchnorm` is `True`) and dropout regularization. Otherwise, the dropout regularization is performed first followed by the activation function and batchnorm (if `batchnorm` is `True`) regularization.        | True      |
-| learning_rate    | The learning rate to use in the optimizer. This is optimized during hyperparameter tuning, so it is not necessary to set precisely.        | 0.001     |
-| n_epochs         | The number of epochs to train for. We recommend keeping a large number (>=1000) when using smaller datasets.        | delUQ: 1000; nnEnsemble: 300      |
-| batch_size       | The batch size to use during training. If larger than dataset size, the entire dataset will be used as a single batch during each epoch of training.        | delUQ: 1000; nnEnsemble: 128      |
-| dist             | The initial distribution of Fourier frequencies. Choices are "uniform", "gaussian", and "laplace".        | uniform   |
-| opt_type         | Optimizer to use. Choices are "Adam" for the Adam optimizer and "SGD" for stochastic gradient descent.        | Adam      |
-| variance         | The scale of the frequency distribution ("dist") when using Fourier features. A "uniform" distribution is constant between +/- scale, a "gaussian" uses scale as the standard deviation, and the "laplace" distribution uses scale as the exponential decay factor.</br></br> This parameter is optimized during hyperparameter tuning, so it is not necessary to set precisely.        | 0.001 |
-| batchnorm        | Whether to use batchnorm regularization (True) or not (False)        | False     |
-| weight_decay     | Strength of weight decay (L2 penalty) to use during optimization        | 0     |
+| Option | Description | Default |
+| ------ | ----------- | ------- |
+| `n_estimators` | Number of neural networks in an `nnEnsemble` model. | `nnEnsemble`: `100` |
+| `ff` | Whether to use Fourier features before the neural network layers. | `True` |
+| `dist` | Initial Fourier-frequency distribution: `uniform`, `gaussian`, or `laplace`. | `uniform` |
+| `mapping_size` | Number of Fourier frequencies when `ff` is enabled. | `128` |
+| `variance` | Scale parameter for the Fourier-frequency distribution. | `0.001` |
+| `activation` | Activation function: `relu`, `tanh`, `identity`, or `siren`. | `relu` |
+| `w0` | SIREN initialization scale. | `30` |
+| `n_layers` | Total number of network layers, including first and last layers. | `4` |
+| `hidden_dim` | Width of each hidden layer. | `128` |
+| `dropout` | Whether to use dropout regularization. | `True` |
+| `dropout_prob` | Probability of dropping a neuron when dropout is enabled. | `0.2` |
+| `activation_first` | When dropout is enabled, whether to apply activation before batchnorm/dropout. | `True` |
+| `batchnorm` | Whether to use batch normalization. | `False` |
+| `opt_type` | Optimizer type: `Adam` or `SGD`. | `Adam` |
+| `learning_rate` | Optimizer learning rate. | `0.001` |
+| `weight_decay` | L2 weight-decay penalty. | `0` |
+| `n_epochs` | Number of training epochs. | `delUQ`: `1000`; `nnEnsemble`: `300` |
+| `batch_size` | Training batch size. If larger than the dataset, the whole dataset is used as one batch. | `delUQ`: `1000`; `nnEnsemble`: `128` |
+
+For `nnEnsemble`, older defaults used the misspelled key `droupout_prob`. DeepOpt still accepts that key for compatibility, but new config files should use `dropout_prob`.
+
+Example:
+
+```yaml title="config.yaml"
+n_estimators: 50
+hidden_dim: 256
+n_epochs: 500
+dropout_prob: 0.1
+```
 
 ## Optimization Settings
 
-Candidate generation can also be configured with an `optimization` section in the same YAML/JSON config file. If this section is omitted, DeepOpt uses the `cpu_large` profile, which is intended for single-node runs with many CPU cores.
+Candidate generation can also be configured with an `optimization:` section in the same YAML/JSON config file. If this section is omitted, DeepOpt uses the `cpu_large` profile, which is intended for single-node runs with many CPU cores.
 
 ```yaml
 optimization:
@@ -69,7 +80,7 @@ Profiles provide sensible defaults:
 
 Any setting specified alongside `profile` overrides that profile value. If `profile` is omitted, DeepOpt starts from `cpu_large` and applies the provided overrides.
 
-Advanced optimization settings include:
+### Budget and thread settings
 
 | Option | Description |
 | ------ | ----------- |
@@ -84,46 +95,30 @@ Advanced optimization settings include:
 
 For `torch_num_threads: auto`, DeepOpt uses all available CPUs on small machines (8 or fewer CPUs). On larger allocations it uses `floor(torch_num_threads_fraction * available_cpus)`, preferring CPU affinity and Slurm CPU variables when available. If thread environment variables such as `OMP_NUM_THREADS`, `MKL_NUM_THREADS`, `OPENBLAS_NUM_THREADS`, or `TORCH_NUM_THREADS` are already set, DeepOpt does not override PyTorch's intra-op thread count unless an explicit integer is provided.
 
-## Constrained Candidate Generation
+### Nonlinear constraint controls
 
-`deepopt optimize` supports BoTorch-style linear constraints in original input units:
+These settings control nonlinear constrained candidate generation. They can also be supplied as CLI flags; explicit CLI flags override config values.
 
-```bash
-deepopt optimize \
-  -l learner_GP.ckpt \
-  -o suggested_inputs.npy \
-  -a EI \
-  --inequality-constraints '[[[0, 1], [1.0, -1.0], 0.0]]'
+| Option | Description | Default |
+| ------ | ----------- | ------- |
+| `nonlinear_mode` | `enforce` or `initialization_only`; `initialization-only` is also accepted in YAML. | `enforce` |
+| `nonlinear_initial_raw_samples` | Raw samples per attempt when searching for nonlinear-feasible starts. Use `null` to reuse the acquisition optimizer raw-sample count. | `null` |
+| `nonlinear_initial_max_tries` | Maximum attempts to find nonlinear-feasible starts. | `5` |
+| `nonlinear_optimization_retries` | Additional retries after nonlinear constrained optimizer failure warnings. | `1` |
+
+```yaml title="optimize_constraints.yaml"
+optimization:
+  profile: fast
+  nonlinear_mode: initialization-only
+  nonlinear_initial_raw_samples: 2048
+  nonlinear_initial_max_tries: 10
+  nonlinear_optimization_retries: 2
 ```
 
-Each linear constraint is `[indices, coefficients, rhs]`. Inequality constraints use `sum(coefficients[i] * x[indices[i]]) >= rhs`; equality constraints use `== rhs`. DeepOpt converts these original-unit constraints to the scaled optimizer coordinates internally. In multi-fidelity runs, the fidelity column is treated as an unscaled fidelity index.
+See [Candidate Generation](candidate_generation.md#nonlinear-constraints) for nonlinear constraint syntax and limitations.
 
-Nonlinear inequality constraints can be loaded from trusted local Python code:
+### Validation rules
 
-```bash
-deepopt optimize \
-  -l learner_GP.ckpt \
-  -o suggested_inputs.npy \
-  -a EI \
-  --nonlinear-inequality-constraints constraints.py:make_constraints \
-  --nonlinear-mode enforce
-```
+Budget settings, restart counts, batch limits, `maxiter`, `n_fantasies`, `nonlinear_initial_raw_samples`, and `nonlinear_initial_max_tries` must be positive integers when provided. `nonlinear_initial_raw_samples` may also be `null`. `nonlinear_optimization_retries` must be a non-negative integer. `torch_num_threads` may be `auto`, `null`, or a positive integer. `torch_num_threads_fraction` must be in `(0, 1]`. Unknown keys under `optimization:` raise an error.
 
-The referenced function must either be a constraint callable itself or return a callable/list of callables. A point is feasible when each callable returns a value `>= 0`. These callables receive candidate tensors in original input units.
-
-`--nonlinear-mode enforce` passes nonlinear constraints to BoTorch. With the pinned BoTorch optimizer this requires `batch_limit=1`; for multiple candidates DeepOpt uses sequential `q=1` optimizer calls where supported. `--nonlinear-mode initialization-only` only uses the nonlinear constraints to choose feasible initial conditions, preserving larger batch limits but not guaranteeing final candidate feasibility.
-
-A complete nonlinear constraint file can look like this:
-
-```python title="constraints.py"
-def make_constraints():
-    def inside_circle(X):
-        return 0.25 - ((X[..., 0] - 0.5) ** 2 + (X[..., 1] - 0.5) ** 2)
-
-    def above_floor(X):
-        return X[..., 2] - 0.1
-
-    return [inside_circle, above_floor]
-```
-
-The callable can return a tensor with batch dimensions; DeepOpt reduces all non-candidate dimensions with logical `all`. Nonlinear constraints are currently limited to single-fidelity optimization. They are not supported for multi-fidelity mixed optimization, fixed-feature subproblems, or KG. If DeepOpt cannot find feasible starts, increase `nonlinear_initial_raw_samples` or `nonlinear_initial_max_tries`, or relax the constraints.
+For acquisition constraints, risk-aware candidate generation, and `propose_best`, see [Candidate Generation](candidate_generation.md).

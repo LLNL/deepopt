@@ -78,6 +78,10 @@ class AcquisitionOptimizationSettings:
     :cvar torch_num_threads: PyTorch intra-op threads, ``"auto"``, or ``None``.
     :cvar torch_num_threads_fraction: Fraction of available CPUs used by ``"auto"``.
     :cvar torch_num_interop_threads: PyTorch inter-op thread count, or ``None``.
+    :cvar nonlinear_mode: ``'enforce'`` or ``'initialization_only'`` for nonlinear constraints.
+    :cvar nonlinear_initial_raw_samples: Optional raw sample count for nonlinear-feasible starts.
+    :cvar nonlinear_initial_max_tries: Number of attempts to find nonlinear-feasible starts.
+    :cvar nonlinear_optimization_retries: Additional retries after optimizer failure warnings.
     """
 
     num_restarts_high: int
@@ -91,6 +95,10 @@ class AcquisitionOptimizationSettings:
     torch_num_threads: Optional[Union[int, str]]
     torch_num_threads_fraction: float
     torch_num_interop_threads: Optional[int]
+    nonlinear_mode: str = Defaults.nonlinear_mode
+    nonlinear_initial_raw_samples: Optional[int] = Defaults.nonlinear_initial_raw_samples
+    nonlinear_initial_max_tries: int = Defaults.nonlinear_initial_max_tries
+    nonlinear_optimization_retries: int = Defaults.nonlinear_optimization_retries
 
 
 @dataclass(frozen=True)
@@ -123,10 +131,10 @@ class AcquisitionOptimizationConstraints:
     nonlinear_inequality_constraints: Optional[List[Callable[[torch.Tensor], torch.Tensor]]] = None
     post_processing_func: Optional[Callable[[torch.Tensor], torch.Tensor]] = None
     batch_initial_conditions: Optional[torch.Tensor] = None
-    nonlinear_mode: str = "enforce"
+    nonlinear_mode: Optional[str] = None
     nonlinear_initial_raw_samples: Optional[int] = None
-    nonlinear_initial_max_tries: int = 5
-    nonlinear_optimization_retries: int = 1
+    nonlinear_initial_max_tries: Optional[int] = None
+    nonlinear_optimization_retries: Optional[int] = None
 
 
 
@@ -305,8 +313,8 @@ class DeepoptBaseModel(ABC):
     :cvar multi_fidelity: True if we're doing a multi-fidelity run, False otherwise
     :cvar num_fidelities: The number of fidelities to use if we're doing a
         multi-fidelity run. `Default: None`
-    :cvar kfolds: The number of kfolds to use when training a delUQ surrogate.
-        `Default: None`
+    :cvar k_folds: The number of folds to use when training a delUQ surrogate.
+        `Default: Defaults.k_folds`
     :cvar full_train_X: The full input dataset. This is read in from `data_file`.
         `Default: None`
     :cvar full_train_Y: The full output dataset. This is read in from `data_file`.
@@ -694,6 +702,21 @@ class DeepoptBaseModel(ABC):
             if isinstance(settings[key], bool) or int(settings[key]) <= 0:
                 raise ValueError(f"optimization.{key} must be a positive integer.")
             settings[key] = int(settings[key])
+        nonlinear_mode = settings["nonlinear_mode"].replace("-", "_")
+        if nonlinear_mode not in {"enforce", "initialization_only"}:
+            raise ValueError("optimization.nonlinear_mode must be 'enforce' or 'initialization_only'.")
+        settings["nonlinear_mode"] = nonlinear_mode
+        nonlinear_initial_raw_samples = settings["nonlinear_initial_raw_samples"]
+        if nonlinear_initial_raw_samples is not None:
+            if isinstance(nonlinear_initial_raw_samples, bool) or int(nonlinear_initial_raw_samples) <= 0:
+                raise ValueError("optimization.nonlinear_initial_raw_samples must be null or a positive integer.")
+            settings["nonlinear_initial_raw_samples"] = int(nonlinear_initial_raw_samples)
+        if isinstance(settings["nonlinear_initial_max_tries"], bool) or int(settings["nonlinear_initial_max_tries"]) <= 0:
+            raise ValueError("optimization.nonlinear_initial_max_tries must be a positive integer.")
+        settings["nonlinear_initial_max_tries"] = int(settings["nonlinear_initial_max_tries"])
+        if isinstance(settings["nonlinear_optimization_retries"], bool) or int(settings["nonlinear_optimization_retries"]) < 0:
+            raise ValueError("optimization.nonlinear_optimization_retries must be a non-negative integer.")
+        settings["nonlinear_optimization_retries"] = int(settings["nonlinear_optimization_retries"])
         fraction = float(settings["torch_num_threads_fraction"])
         if not 0 < fraction <= 1:
             raise ValueError("optimization.torch_num_threads_fraction must be in (0, 1].")
@@ -766,10 +789,11 @@ class DeepoptBaseModel(ABC):
         nonlinear_inequality_constraints: Optional[List[Callable[[torch.Tensor], torch.Tensor]]] = None,
         post_processing_func: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
         batch_initial_conditions: Optional[torch.Tensor] = None,
-        nonlinear_mode: str = "enforce",
+        nonlinear_mode: Optional[str] = None,
         nonlinear_initial_raw_samples: Optional[int] = None,
-        nonlinear_initial_max_tries: int = 5,
-        nonlinear_optimization_retries: int = 1,
+        nonlinear_initial_max_tries: Optional[int] = None,
+        nonlinear_optimization_retries: Optional[int] = None,
+        optimization_settings: Optional[AcquisitionOptimizationSettings] = None,
     ) -> Optional[AcquisitionOptimizationConstraints]:
         direct_constraints = any(
             value is not None
@@ -785,6 +809,8 @@ class DeepoptBaseModel(ABC):
             raise ValueError("Pass either optimization_constraints or direct constraint arguments, not both.")
         if optimization_constraints is None and not direct_constraints:
             return None
+        if optimization_settings is None:
+            optimization_settings = self._resolve_optimization_settings()
         constraints = optimization_constraints or AcquisitionOptimizationConstraints(
             inequality_constraints=inequality_constraints,
             equality_constraints=equality_constraints,
@@ -796,17 +822,46 @@ class DeepoptBaseModel(ABC):
             nonlinear_initial_max_tries=nonlinear_initial_max_tries,
             nonlinear_optimization_retries=nonlinear_optimization_retries,
         )
-        if constraints.nonlinear_mode not in {"enforce", "initialization_only"}:
+        nonlinear_mode = constraints.nonlinear_mode or optimization_settings.nonlinear_mode
+        nonlinear_initial_raw_samples = (
+            constraints.nonlinear_initial_raw_samples
+            if constraints.nonlinear_initial_raw_samples is not None
+            else optimization_settings.nonlinear_initial_raw_samples
+        )
+        nonlinear_initial_max_tries = (
+            constraints.nonlinear_initial_max_tries
+            if constraints.nonlinear_initial_max_tries is not None
+            else optimization_settings.nonlinear_initial_max_tries
+        )
+        nonlinear_optimization_retries = (
+            constraints.nonlinear_optimization_retries
+            if constraints.nonlinear_optimization_retries is not None
+            else optimization_settings.nonlinear_optimization_retries
+        )
+        if nonlinear_mode not in {"enforce", "initialization_only"}:
             raise ValueError("nonlinear_mode must be 'enforce' or 'initialization_only'.")
-        if constraints.nonlinear_initial_max_tries <= 0:
-            raise ValueError("nonlinear_initial_max_tries must be positive.")
+        if nonlinear_initial_raw_samples is not None:
+            if (
+                isinstance(nonlinear_initial_raw_samples, (bool, np.bool_))
+                or not isinstance(nonlinear_initial_raw_samples, (int, np.integer))
+                or nonlinear_initial_raw_samples <= 0
+            ):
+                raise ValueError("nonlinear_initial_raw_samples must be null or a positive integer.")
+            nonlinear_initial_raw_samples = int(nonlinear_initial_raw_samples)
         if (
-            isinstance(constraints.nonlinear_optimization_retries, (bool, np.bool_))
-            or not isinstance(constraints.nonlinear_optimization_retries, (int, np.integer))
-            or constraints.nonlinear_optimization_retries < 0
+            isinstance(nonlinear_initial_max_tries, (bool, np.bool_))
+            or not isinstance(nonlinear_initial_max_tries, (int, np.integer))
+            or nonlinear_initial_max_tries <= 0
+        ):
+            raise ValueError("nonlinear_initial_max_tries must be positive.")
+        nonlinear_initial_max_tries = int(nonlinear_initial_max_tries)
+        if (
+            isinstance(nonlinear_optimization_retries, (bool, np.bool_))
+            or not isinstance(nonlinear_optimization_retries, (int, np.integer))
+            or nonlinear_optimization_retries < 0
         ):
             raise ValueError("nonlinear_optimization_retries must be a non-negative integer.")
-        nonlinear_optimization_retries = int(constraints.nonlinear_optimization_retries)
+        nonlinear_optimization_retries = int(nonlinear_optimization_retries)
         nonlinear_constraints = self._normalize_nonlinear_constraints(constraints.nonlinear_inequality_constraints)
         if nonlinear_constraints and self.multi_fidelity:
             raise NotImplementedError("Nonlinear inequality constraints are only supported for single-fidelity optimization.")
@@ -816,9 +871,9 @@ class DeepoptBaseModel(ABC):
             nonlinear_inequality_constraints=nonlinear_constraints,
             post_processing_func=constraints.post_processing_func,
             batch_initial_conditions=self._batch_initial_conditions_to_model_units(constraints.batch_initial_conditions),
-            nonlinear_mode=constraints.nonlinear_mode,
-            nonlinear_initial_raw_samples=constraints.nonlinear_initial_raw_samples,
-            nonlinear_initial_max_tries=constraints.nonlinear_initial_max_tries,
+            nonlinear_mode=nonlinear_mode,
+            nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
+            nonlinear_initial_max_tries=nonlinear_initial_max_tries,
             nonlinear_optimization_retries=nonlinear_optimization_retries,
         )
 
@@ -1202,29 +1257,22 @@ class DeepoptBaseModel(ABC):
         optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Get the candidates for a multi-fidelity run.
+        Generate scaled candidates for a multi-fidelity run.
 
-        The bounds will be set and the fidelity cost model will be applied here first.
-        Then whatever acquisition method requested with `acq_method` will be applied.
+        The last column is the integer fidelity index. Public CLI usage supports
+        ``KG`` and ``MaxValEntropy``; ``GIBBON`` is an internal/API entropy-style
+        option handled by the same mixed-optimization path.
 
-        :param model: The model loaded in by `load_model`. This will be a `SingleTaskMultiFidelityGP`
-            model if we used GP to train the model or a `DeltaEnc` model if we used delUQ.
-        :param acq_method: The acquisition method. Either 'GIBBON', 'MaxValEntropy', or 'KG'
-        :param q: The number of candidates provided by the user (or the default value assigned
-            in Default)
-        :param fidelity_cost: A list of how expensive each fidelity should be seen as
-        :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
-            be determined by the `risk_measure` argument given by the user to the `deepopt optimize`
-            command.
-        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
-        :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
-            the model (at the expense of model complexity and performance).
-        :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
-            while the rest are acquired by the specified acquisition method. If `False`, acquire all points
-            with the acquisition method as usual.
-
-        :returns: A two element tuple containing a q x d-dim tensor of generated candidates
-            and an associated acquisition value.
+        :param model: The model loaded by ``load_model``.
+        :param acq_method: ``KG``, ``MaxValEntropy``, or internal ``GIBBON``.
+        :param q: Number of candidates to generate.
+        :param fidelity_cost: Cost weights indexed by rounded fidelity.
+        :param risk_objective: Optional BoTorch VaR/CVaR objective applied to posterior samples.
+        :param risk_n_deltas: Number of input perturbations used by the risk objective.
+        :param optimization_settings: Resolved or explicit acquisition optimizer settings.
+        :param propose_best: Whether to prepend the target-fidelity posterior maximizer.
+        :param optimization_constraints: Optional linear optimization constraints.
+        :returns: ``(candidates, acq_value)`` in scaled model coordinates.
         """
         settings = self._resolve_optimization_settings(optimization_settings)
         n_fantasies = settings.n_fantasies
@@ -1383,27 +1431,17 @@ class DeepoptBaseModel(ABC):
         optimization_constraints: Optional[AcquisitionOptimizationConstraints] = None,
     ) -> Tuple[Any, Any]:
         """
-        Get the candidates for a single-fidelity run.
+        Generate scaled candidates for a single-fidelity run.
 
-        The bounds will be set first, then whatever acquisition method requested with `acq_method`
-        will be applied.
-
-        :param model: The model loaded in by `load_model`. This will be a `SingleTaskGP`
-            model if we used GP to train the model or a `DeltaEnc` if we used delUQ.
-        :param acq_method: The acquisition method. Either 'EI', 'NEI', 'MaxValEntropy', or 'KG'
-        :param q: The number of candidates provided by the user (or the default value assigned
-            in Default)
-        :param risk_objective: Either a `VaR` or a `CVaR` risk objective object from BoTorch. This will
-            be determined by the `risk_measure` argument given by the user to the `deepopt optimize`
-            command.
-        :param risk_n_deltas: The number of input perturbations to sample for X's uncertainty
-        :param n_fantasies: Number of fantasies to generate. The higher this number the more accurate
-            the model (at the expense of model complexity and performance).
-        :param propose_best: If `True`, the first candidate is selected to maximize the surrogate posterior,
-            while the rest are acquired by the specified acquisition method. If `False`, acquire all points
-            with the acquisition method as usual.
-        :returns: A two element tuple containing a q x d-dim tensor of generated candidates
-            and an associated acquisition value.
+        :param model: The model loaded by ``load_model``.
+        :param acq_method: ``EI``, ``NEI``, ``MaxValEntropy``, or ``KG``.
+        :param q: Number of candidates to generate.
+        :param risk_objective: Optional BoTorch VaR/CVaR objective applied to posterior samples.
+        :param risk_n_deltas: Number of input perturbations used by the risk objective.
+        :param optimization_settings: Resolved or explicit acquisition optimizer settings.
+        :param propose_best: Whether to prepend the current posterior maximizer.
+        :param optimization_constraints: Optional linear/nonlinear optimization constraints.
+        :returns: ``(candidates, acq_value)`` in scaled model coordinates.
         """
         settings = self._resolve_optimization_settings(optimization_settings)
         n_fantasies = settings.n_fantasies
@@ -1515,8 +1553,8 @@ class DeepoptBaseModel(ABC):
         Generate scaled candidate tensors with the requested acquisition method.
 
         Single-fidelity runs support ``EI``, ``NEI``, ``KG``, and ``MaxValEntropy``.
-        Multi-fidelity runs support ``KG``, ``MaxValEntropy``, and ``GIBBON`` through
-        mixed optimization over the last fidelity column. Candidate tensors returned
+        Multi-fidelity CLI runs support ``KG`` and ``MaxValEntropy``; ``GIBBON`` is
+        available through the Python API entropy path. Candidate tensors returned
         from this method are still in model coordinates; ``optimize`` converts them
         back to original units before saving. Risk objectives may be used with EI,
         NEI, and KG, but not MaxValEntropy. ``propose_best=True`` reserves the first
@@ -1584,10 +1622,10 @@ class DeepoptBaseModel(ABC):
         nonlinear_inequality_constraints: Optional[List[Callable[[torch.Tensor], torch.Tensor]]] = None,
         post_processing_func: Optional[Callable[[torch.Tensor], torch.Tensor]] = None,
         batch_initial_conditions: Optional[torch.Tensor] = None,
-        nonlinear_mode: str = "enforce",
+        nonlinear_mode: Optional[str] = None,
         nonlinear_initial_raw_samples: Optional[int] = None,
-        nonlinear_initial_max_tries: int = 5,
-        nonlinear_optimization_retries: int = 1,
+        nonlinear_initial_max_tries: Optional[int] = None,
+        nonlinear_optimization_retries: Optional[int] = None,
     ) -> None:
         """
         Propose candidates from a trained checkpoint and save them as a NumPy array.
@@ -1598,8 +1636,10 @@ class DeepoptBaseModel(ABC):
         Linear constraints and ``batch_initial_conditions`` are authored in original
         input units and converted internally. Nonlinear constraints receive original
         input units, use ``>= 0`` as feasible, and are limited to single-fidelity
-        optimization. Risk measures interpret ``x_stddev`` in original input units;
-        the fidelity perturbation is forced to zero for multi-fidelity runs.
+        optimization. Nonlinear control arguments override matching values from the
+        resolved ``optimization`` config section. Risk measures interpret
+        ``x_stddev`` in original input units; the fidelity perturbation is forced to
+        zero for multi-fidelity runs.
 
         :param outfile: File path for the saved candidate ``.npy`` array.
         :param learner_file: Checkpoint file produced by ``learn``.
@@ -1620,10 +1660,10 @@ class DeepoptBaseModel(ABC):
         :param nonlinear_inequality_constraints: Nonlinear feasibility callables.
         :param post_processing_func: Optional BoTorch candidate post-processing function.
         :param batch_initial_conditions: Optional original-unit optimizer initial conditions.
-        :param nonlinear_mode: ``'enforce'`` or ``'initialization_only'``.
-        :param nonlinear_initial_raw_samples: Optional raw samples for nonlinear-feasible starts.
-        :param nonlinear_initial_max_tries: Maximum attempts to find nonlinear-feasible starts.
-        :param nonlinear_optimization_retries: Additional retries after nonlinear optimizer failure warnings.
+        :param nonlinear_mode: ``'enforce'`` or ``'initialization_only'``; defaults to config.
+        :param nonlinear_initial_raw_samples: Optional raw samples for nonlinear-feasible starts; defaults to config.
+        :param nonlinear_initial_max_tries: Maximum attempts to find nonlinear-feasible starts; defaults to config.
+        :param nonlinear_optimization_retries: Additional retries after nonlinear optimizer failure warnings; defaults to config.
         """
         optimization_settings = self._resolve_optimization_settings(optimization_settings)
         optimization_constraints = self._normalize_optimization_constraints(
@@ -1637,6 +1677,7 @@ class DeepoptBaseModel(ABC):
             nonlinear_initial_raw_samples=nonlinear_initial_raw_samples,
             nonlinear_initial_max_tries=nonlinear_initial_max_tries,
             nonlinear_optimization_retries=nonlinear_optimization_retries,
+            optimization_settings=optimization_settings,
         )
         self._configure_torch_threads(optimization_settings)
         print(

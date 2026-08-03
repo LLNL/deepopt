@@ -184,6 +184,53 @@ def test_optimize_cli_parses_constraints(monkeypatch, single_fidelity_data_file,
     assert constraints.nonlinear_optimization_retries == 3
 
 
+def test_optimize_cli_omitted_nonlinear_controls_defer_to_config(single_fidelity_data_file, tmp_path, monkeypatch):
+    learner_file = tmp_path / "learner.ckpt"
+    learner_file.write_text("placeholder")
+    config_file = tmp_path / "optimize.yaml"
+    config_file.write_text("optimization:\n  nonlinear_optimization_retries: 4\n")
+    constraint_script = tmp_path / "constraints.py"
+    constraint_script.write_text("def c(X):\n    return X[..., 0]\n")
+    calls = []
+
+    def fake_optimize(self, **kwargs):
+        calls.append((self, kwargs))
+
+    monkeypatch.setattr(GPModel, "optimize", fake_optimize)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        deepopt_cli,
+        [
+            "optimize",
+            "-i",
+            str(single_fidelity_data_file),
+            "-o",
+            str(tmp_path / "suggested.npy"),
+            "-l",
+            str(learner_file),
+            "-b",
+            "[[0, 1], [0, 1]]",
+            "-a",
+            "EI",
+            "-c",
+            str(config_file),
+            "--device",
+            "cpu",
+            "--nonlinear-inequality-constraints",
+            f"{constraint_script}:c",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    model, kwargs = calls[0]
+    assert model.config_settings.get_setting("optimization") == {"nonlinear_optimization_retries": 4}
+    constraints = kwargs["optimization_constraints"]
+    assert constraints.nonlinear_mode is None
+    assert constraints.nonlinear_initial_max_tries is None
+    assert constraints.nonlinear_optimization_retries is None
+
+
 def test_optimize_cli_rejects_non_integer_constraint_indices(single_fidelity_data_file, tmp_path):
     learner_file = tmp_path / "learner.ckpt"
     learner_file.write_text("placeholder")
