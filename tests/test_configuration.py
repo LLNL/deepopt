@@ -91,6 +91,10 @@ def test_defaults_public_values_regression():
     assert Defaults.torch_num_threads == "auto"
     assert Defaults.torch_num_threads_fraction == 0.8
     assert Defaults.torch_num_interop_threads == 1
+    assert Defaults.nonlinear_mode == "enforce"
+    assert Defaults.nonlinear_initial_raw_samples is None
+    assert Defaults.nonlinear_initial_max_tries == 5
+    assert Defaults.nonlinear_optimization_retries == 1
 
 
 def test_optimization_profiles_include_legacy_and_large_cpu_defaults():
@@ -106,11 +110,26 @@ def test_optimization_profiles_include_legacy_and_large_cpu_defaults():
 
 def test_config_settings_loads_nested_optimization_section(tmp_path):
     config_file = tmp_path / "config.yaml"
-    config_file.write_text("optimization:\n  profile: fast\n  batch_limit_high: 6\n")
+    config_file.write_text(
+        "optimization:\n"
+        "  profile: fast\n"
+        "  batch_limit_high: 6\n"
+        "  nonlinear_mode: initialization-only\n"
+        "  nonlinear_initial_raw_samples: 64\n"
+        "  nonlinear_initial_max_tries: 2\n"
+        "  nonlinear_optimization_retries: 0\n"
+    )
 
     settings = ConfigSettings("GP", config_file=str(config_file))
 
-    assert settings.get_setting("optimization") == {"profile": "fast", "batch_limit_high": 6}
+    assert settings.get_setting("optimization") == {
+        "profile": "fast",
+        "batch_limit_high": 6,
+        "nonlinear_mode": "initialization-only",
+        "nonlinear_initial_raw_samples": 64,
+        "nonlinear_initial_max_tries": 2,
+        "nonlinear_optimization_retries": 0,
+    }
 
 
 def test_nnensemble_default_keys_regression():

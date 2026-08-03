@@ -99,6 +99,10 @@ def test_default_thread_sentinels_become_none_in_settings():
         torch_num_threads="auto",
         torch_num_threads_fraction=0.8,
         torch_num_interop_threads=1,
+        nonlinear_mode="enforce",
+        nonlinear_initial_raw_samples=None,
+        nonlinear_initial_max_tries=5,
+        nonlinear_optimization_retries=1,
     )
 
     settings = benchmark_settings(base_settings, args, 4, "default", "default")
@@ -167,6 +171,10 @@ def test_run_once_uses_native_get_candidates(monkeypatch, tmp_path):
                 torch_num_threads="auto",
                 torch_num_threads_fraction=0.8,
                 torch_num_interop_threads=1,
+                nonlinear_mode="enforce",
+                nonlinear_initial_raw_samples=None,
+                nonlinear_initial_max_tries=5,
+                nonlinear_optimization_retries=1,
             )
 
         def _configure_torch_threads(self, settings):

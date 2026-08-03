@@ -12,7 +12,12 @@ from deepopt.defaults import DELUQ_CONFIG, GP_CONFIG, NNENSEMBLE_CONFIG
 
 class ConfigSettings:
     """
-    Class for loading and storing configuration settings.
+    Load and store DeepOpt configuration settings.
+
+    Config files may be YAML or JSON. User-provided settings are merged over
+    model-specific defaults; GP training has no model-specific hyperparameter
+    defaults. Optimize-time settings are stored under ``optimization`` and
+    validated when candidate generation resolves optimizer settings.
     """
 
     def __init__(self, model_type: str, config_file: str = None):

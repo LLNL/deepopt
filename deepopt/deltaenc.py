@@ -136,6 +136,7 @@ class DeltaEnc(Model):
 
     @property
     def num_outputs(self):
+        """Number of output dimensions produced by the model posterior."""
         return self.output_dim
 
     # copied from model.py

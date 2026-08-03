@@ -57,6 +57,10 @@ OPTIMIZATION_PROFILES = {
         "torch_num_threads": None,
         "torch_num_threads_fraction": 0.8,
         "torch_num_interop_threads": None,
+        "nonlinear_mode": "enforce",
+        "nonlinear_initial_raw_samples": None,
+        "nonlinear_initial_max_tries": 5,
+        "nonlinear_optimization_retries": 1,
     },
     "cpu_large": {
         "num_restarts_high": 32,
@@ -70,6 +74,10 @@ OPTIMIZATION_PROFILES = {
         "torch_num_threads": None,
         "torch_num_threads_fraction": 0.8,
         "torch_num_interop_threads": None,
+        "nonlinear_mode": "enforce",
+        "nonlinear_initial_raw_samples": None,
+        "nonlinear_initial_max_tries": 5,
+        "nonlinear_optimization_retries": 1,
     },
     "fast": {
         "num_restarts_high": 8,
@@ -83,6 +91,10 @@ OPTIMIZATION_PROFILES = {
         "torch_num_threads": "auto",
         "torch_num_threads_fraction": 0.8,
         "torch_num_interop_threads": 1,
+        "nonlinear_mode": "enforce",
+        "nonlinear_initial_raw_samples": None,
+        "nonlinear_initial_max_tries": 5,
+        "nonlinear_optimization_retries": 1,
     },
 }
 
@@ -107,7 +119,17 @@ class Defaults:
         `Default value: 1024`
     :cvar raw_samples_high: The default value for the number of raw samples to use (high).
         `Default value: 8192`
+    :cvar batch_limit_low: The default low-budget restart batch limit. `Default value: 8`
+    :cvar batch_limit_high: The default high-budget restart batch limit. `Default value: 32`
+    :cvar maxiter: The default maximum local optimizer iterations. `Default value: 200`
     :cvar n_fantasies: The default value for the number of fantasy models to construct. `Default value: 64`
+    :cvar torch_num_threads: The default PyTorch intra-op thread setting. `Default value: 'auto'`
+    :cvar torch_num_threads_fraction: Fraction of available CPUs used by ``auto`` threading. `Default value: 0.8`
+    :cvar torch_num_interop_threads: The default PyTorch inter-op thread setting. `Default value: 1`
+    :cvar nonlinear_mode: Default nonlinear constraint mode. `Default value: 'enforce'`
+    :cvar nonlinear_initial_raw_samples: Default raw samples for nonlinear-feasible starts. `Default value: None`
+    :cvar nonlinear_initial_max_tries: Default attempts to find nonlinear-feasible starts. `Default value: 5`
+    :cvar nonlinear_optimization_retries: Default retries after nonlinear optimizer warnings. `Default value: 1`
     """
 
     random_seed: int = 4321
@@ -128,3 +150,7 @@ class Defaults:
     torch_num_threads: str = "auto"
     torch_num_threads_fraction: float = 0.8
     torch_num_interop_threads: int = 1
+    nonlinear_mode: str = "enforce"
+    nonlinear_initial_raw_samples = None
+    nonlinear_initial_max_tries: int = 5
+    nonlinear_optimization_retries: int = 1

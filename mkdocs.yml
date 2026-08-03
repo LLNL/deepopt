@@ -1,4 +1,6 @@
 site_name: DeepOpt
+exclude_docs: |
+  README.md
 
 nav:
   - DeepOpt: "index.md"
@@ -6,8 +8,11 @@ nav:
     - Overview: "user_guide/index.md"
     - Installation: "user_guide/installation.md"
     - Tutorial: "user_guide/tutorial.md"
+    - CLI Reference: "user_guide/cli.md"
     - Configuration: "user_guide/configuration.md"
+    - Candidate Generation: "user_guide/candidate_generation.md"
     - Acquisition Functions: "user_guide/acquisition_functions.md"
+    - Checkpoints and Loading: "user_guide/checkpoints.md"
   - Reference Guide:
     - DeepOpt Reference: "api_reference/index.md"
     - API Reference: "api_reference/"

@@ -22,23 +22,57 @@ class StandardizeOutputScaler:
         self.eps = eps
 
     def to(self, device: torch.device) -> "StandardizeOutputScaler":
+        """
+        Move stored standardization tensors to a device.
+
+        :param device: Target PyTorch device.
+        :returns: This scaler after moving ``mean`` and ``std``.
+        """
         self.mean = self.mean.to(device)
         self.std = self.std.to(device)
         return self
 
     def transform(self, Y: torch.Tensor, X: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Standardize outputs using legacy BoTorch ``Standardize`` statistics.
+
+        :param Y: Output means or samples in original output units.
+        :param X: Ignored; accepted for API compatibility with ``OutputScaler``.
+        :returns: Outputs in z-score units with the same shape as ``Y``.
+        """
         mean, std = self._standardization_tensors(Y)
         return (Y - mean) / std
 
     def inverse_transform(self, Y: torch.Tensor, X: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Convert standardized outputs back to original output units.
+
+        :param Y: Output means or samples in z-score units.
+        :param X: Ignored; accepted for API compatibility with ``OutputScaler``.
+        :returns: Outputs in original units with the same shape as ``Y``.
+        """
         mean, std = self._standardization_tensors(Y)
         return Y * std + mean
 
     def inverse_variance(self, Yvar: torch.Tensor, X: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Convert standardized variances back to squared original output units.
+
+        :param Yvar: Variance tensor in z-score-squared units.
+        :param X: Ignored; accepted for API compatibility with ``OutputScaler``.
+        :returns: Variance tensor in squared original output units.
+        """
         _, std = self._standardization_tensors(Yvar)
         return Yvar * std.pow(2)
 
     def inverse_covariance(self, covariance: torch.Tensor, X: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """
+        Convert standardized covariance matrices back to original output units.
+
+        :param covariance: Covariance tensor in z-score-squared units.
+        :param X: Ignored; accepted for API compatibility with ``OutputScaler``.
+        :returns: Covariance tensor scaled by the stored output standard deviations.
+        """
         std = self.std.to(covariance.device).squeeze()
         if std.numel() == 1:
             return covariance * std.pow(2)
@@ -51,6 +85,15 @@ class StandardizeOutputScaler:
         device: Optional[torch.device] = None,
         prefix: str = "outcome_transform.",
     ) -> "StandardizeOutputScaler":
+        """
+        Reconstruct a legacy scaler from a BoTorch ``Standardize`` state dict.
+
+        :param state: Checkpoint state dictionary containing ``means`` and either ``stdvs`` or ``_stdvs_sq``.
+        :param device: Optional target device for restored tensors.
+        :param prefix: State-dict key prefix used by the legacy outcome transform.
+        :returns: A scaler compatible with DeepOpt's current prediction scaling API.
+        :raises RuntimeError: If the required legacy statistics are missing.
+        """
         mean_key = f"{prefix}means"
         std_key = f"{prefix}stdvs"
         std_sq_key = f"{prefix}_stdvs_sq"

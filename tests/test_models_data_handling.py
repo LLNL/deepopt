@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 import torch
@@ -9,6 +11,7 @@ pytest.importorskip("ray")
 from deepopt.configuration import ConfigSettings
 from deepopt.models import (
     DEEPOPT_CHECKPOINT_KEY,
+    AcquisitionOptimizationConstraints,
     AcquisitionOptimizationSettings,
     DeepoptBaseModel,
     DeepOptSingleTaskGP,
@@ -246,6 +249,34 @@ def test_optimization_settings_resolve_profile_with_overrides(single_fidelity_da
     assert opt_settings.torch_num_threads == 3
 
 
+def test_optimization_settings_resolve_nonlinear_controls(single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    settings.set_setting(
+        "optimization",
+        {
+            "profile": "fast",
+            "nonlinear_mode": "initialization-only",
+            "nonlinear_initial_raw_samples": 64,
+            "nonlinear_initial_max_tries": 2,
+            "nonlinear_optimization_retries": 0,
+        },
+    )
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    model = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+
+    opt_settings = model._resolve_optimization_settings()
+
+    assert opt_settings.nonlinear_mode == "initialization_only"
+    assert opt_settings.nonlinear_initial_raw_samples == 64
+    assert opt_settings.nonlinear_initial_max_tries == 2
+    assert opt_settings.nonlinear_optimization_retries == 0
+
+
 def test_auto_torch_threads_use_all_small_allocations_and_fraction_large(monkeypatch):
     monkeypatch.setattr(DeepoptBaseModel, "_available_cpu_count", staticmethod(lambda: 8))
     assert DeepoptBaseModel._resolve_auto_torch_num_threads(0.8) == 8
@@ -280,6 +311,10 @@ def test_configure_torch_threads_respects_auto_and_explicit(monkeypatch, single_
             torch_num_threads="auto",
             torch_num_threads_fraction=0.7,
             torch_num_interop_threads=2,
+            nonlinear_mode="enforce",
+            nonlinear_initial_raw_samples=None,
+            nonlinear_initial_max_tries=5,
+            nonlinear_optimization_retries=1,
         )
     )
 
@@ -364,6 +399,511 @@ def test_single_fidelity_expensive_acquisitions_use_low_restart_settings(
     assert captured["num_restarts"] == 4
     assert captured["raw_samples"] == 30
     assert captured["options"] == {"batch_limit": 3, "maxiter": 22, "seed": wrapper.random_seed}
+
+
+def test_single_fidelity_linear_constraints_convert_and_forward(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[10.0, 0.0], [20.0, 2.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: object())
+
+    def fake_optimize_acqf(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.1, 0.2]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    wrapper._get_candidates_sf(
+        model=object(),
+        acq_method="EI",
+        q=1,
+        optimization_constraints=wrapper._normalize_optimization_constraints(
+            inequality_constraints=[([0, 1], [1.0, 2.0], 14.0)],
+            equality_constraints=[([1], [1.0], 1.0)],
+        ),
+    )
+
+    ineq_indices, ineq_coefficients, ineq_rhs = captured["inequality_constraints"][0]
+    torch.testing.assert_close(ineq_indices.cpu(), torch.tensor([0, 1]))
+    torch.testing.assert_close(ineq_coefficients.cpu(), torch.tensor([10.0, 4.0]))
+    assert ineq_rhs == pytest.approx(4.0)
+    eq_indices, eq_coefficients, eq_rhs = captured["equality_constraints"][0]
+    torch.testing.assert_close(eq_indices.cpu(), torch.tensor([1]))
+    torch.testing.assert_close(eq_coefficients.cpu(), torch.tensor([2.0]))
+    assert eq_rhs == pytest.approx(1.0)
+
+
+def test_multi_fidelity_linear_constraints_keep_fidelity_unscaled(monkeypatch, multi_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[10.0, 0.0, 0.0], [20.0, 2.0, 2.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(multi_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        multi_fidelity=True,
+        device="cpu",
+    )
+    captured = {}
+
+    def fake_mf_mes(*args, **kwargs):
+        return object()
+
+    def fake_optimize_acqf_mixed(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.1, 0.2, 1.0]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.qMultiFidelityMaxValueEntropy", fake_mf_mes)
+    monkeypatch.setattr("deepopt.models.optimize_acqf_mixed", fake_optimize_acqf_mixed)
+
+    wrapper._get_candidates_mf(
+        model=object(),
+        acq_method="MaxValEntropy",
+        q=1,
+        fidelity_cost=np.array([1.0, 3.0, 5.0], dtype=np.float32),
+        optimization_constraints=wrapper._normalize_optimization_constraints(
+            inequality_constraints=[([0, 2], [1.0, 1.0], 12.0)],
+        ),
+    )
+
+    indices, coefficients, rhs = captured["inequality_constraints"][0]
+    torch.testing.assert_close(indices.cpu(), torch.tensor([0, 2]))
+    torch.testing.assert_close(coefficients.cpu(), torch.tensor([10.0, 1.0]))
+    assert rhs == pytest.approx(2.0)
+
+
+def test_nonlinear_constraints_force_batch_limit_and_initial_conditions(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    settings.set_setting("optimization", {"profile": "fast", "batch_limit_high": 4})
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    class FakeAcq:
+        X_pending = None
+
+        def __call__(self, X):
+            return X.sum(dim=(-1, -2))
+
+        def set_X_pending(self, X_pending):
+            self.X_pending = X_pending
+
+    initial_conditions = torch.tensor([[[0.8, 0.2]]], dtype=torch.float32)
+
+    def fake_optimize_acqf(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.8, 0.2]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: FakeAcq())
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    with pytest.warns(RuntimeWarning, match="batch_limit=1"):
+        wrapper._get_candidates_sf(
+            model=object(),
+            acq_method="EI",
+            q=1,
+            optimization_constraints=wrapper._normalize_optimization_constraints(
+                nonlinear_inequality_constraints=[lambda X: X[..., 0] - 0.5],
+                batch_initial_conditions=initial_conditions,
+            ),
+        )
+
+    assert captured["options"]["batch_limit"] == 1
+    assert "nonlinear_inequality_constraints" in captured
+    torch.testing.assert_close(captured["batch_initial_conditions"], initial_conditions)
+
+
+def test_entropy_candidate_sets_reject_equality_constraints(single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+
+    with pytest.raises(NotImplementedError, match="Equality constraints"):
+        wrapper._filter_candidate_set_for_constraints(
+            torch.rand(10, 2),
+            wrapper._normalize_optimization_constraints(equality_constraints=[([0], [1.0], 0.5)]),
+        )
+
+
+def test_nonlinear_initialization_only_omits_botorch_constraints(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    class FakeAcq:
+        def __call__(self, X):
+            return X.sum(dim=(-1, -2))
+
+    def fake_optimize_acqf(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.8, 0.2]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: FakeAcq())
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    wrapper._get_candidates_sf(
+        model=object(),
+        acq_method="EI",
+        q=1,
+        optimization_constraints=wrapper._normalize_optimization_constraints(
+            nonlinear_inequality_constraints=[lambda X: X[..., 0] - 0.5],
+            nonlinear_mode="initialization_only",
+            nonlinear_initial_raw_samples=16,
+        ),
+    )
+
+    assert "nonlinear_inequality_constraints" not in captured
+    assert captured["options"]["batch_limit"] != 1
+    assert torch.all(captured["batch_initial_conditions"][..., 0] >= 0.5)
+
+
+def test_nonlinear_optimization_retries_with_regenerated_initial_conditions(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    settings.set_setting("optimization", {"profile": "fast", "num_restarts_high": 1})
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+        random_seed=123,
+    )
+    calls = []
+
+    class FakeAcq:
+        def __call__(self, X):
+            return X[..., 0].reshape(-1)
+
+    def fake_draw_sobol_samples(bounds, n, q, seed):
+        assert q == 1
+        return torch.tensor([[[0.6 + 0.001 * seed, 0.1]]], dtype=torch.float32)
+
+    def fake_optimize_acqf(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            warnings.warn(
+                "Optimization failed within `scipy.optimize.minimize` with status 1. "
+                "Because you specified `batch_initial_conditions`, optimization will not be retried.",
+                RuntimeWarning,
+            )
+            return torch.tensor([[0.6, 0.1]]), torch.tensor(0.1)
+        return torch.tensor([[0.9, 0.1]]), torch.tensor(0.9)
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: FakeAcq())
+    monkeypatch.setattr("deepopt.models.draw_sobol_samples", fake_draw_sobol_samples)
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    with pytest.warns(RuntimeWarning, match="Retrying nonlinear acquisition optimization"):
+        candidates, _ = wrapper._get_candidates_sf(
+            model=object(),
+            acq_method="EI",
+            q=1,
+            optimization_constraints=wrapper._normalize_optimization_constraints(
+                nonlinear_inequality_constraints=[lambda X: X[..., 0] - 0.5],
+                nonlinear_mode="initialization_only",
+                nonlinear_initial_raw_samples=1,
+                nonlinear_initial_max_tries=1,
+            ),
+        )
+
+    assert len(calls) == 2
+    assert not torch.equal(calls[0]["batch_initial_conditions"], calls[1]["batch_initial_conditions"])
+    torch.testing.assert_close(candidates, torch.tensor([[0.9, 0.1]]))
+
+
+def test_nonlinear_optimization_retries_can_be_disabled(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    calls = []
+
+    class FakeAcq:
+        def __call__(self, X):
+            return X[..., 0].reshape(-1)
+
+    def fake_optimize_acqf(*args, **kwargs):
+        calls.append(kwargs)
+        warnings.warn(
+            "Optimization failed within `scipy.optimize.minimize` with status 1. "
+            "Because you specified `batch_initial_conditions`, optimization will not be retried.",
+            RuntimeWarning,
+        )
+        return torch.tensor([[0.6, 0.1]]), torch.tensor(0.1)
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: FakeAcq())
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    with pytest.warns(RuntimeWarning, match="will not be retried"):
+        wrapper._get_candidates_sf(
+            model=object(),
+            acq_method="EI",
+            q=1,
+            optimization_constraints=wrapper._normalize_optimization_constraints(
+                nonlinear_inequality_constraints=[lambda X: X[..., 0] - 0.5],
+                nonlinear_mode="initialization_only",
+                nonlinear_initial_raw_samples=8,
+                nonlinear_optimization_retries=0,
+            ),
+        )
+
+    assert len(calls) == 1
+
+
+def test_nonlinear_optimization_does_not_retry_user_initial_conditions(monkeypatch, single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    calls = []
+    initial_conditions = torch.tensor([[[0.8, 0.2]]], dtype=torch.float32)
+
+    class FakeAcq:
+        def __call__(self, X):
+            return X[..., 0].reshape(-1)
+
+    def fake_optimize_acqf(*args, **kwargs):
+        calls.append(kwargs)
+        warnings.warn(
+            "Optimization failed within `scipy.optimize.minimize` with status 1. "
+            "Because you specified `batch_initial_conditions`, optimization will not be retried.",
+            RuntimeWarning,
+        )
+        return torch.tensor([[0.8, 0.2]]), torch.tensor(0.1)
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: FakeAcq())
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    with pytest.warns(RuntimeWarning, match="will not be retried"):
+        wrapper._get_candidates_sf(
+            model=object(),
+            acq_method="EI",
+            q=1,
+            optimization_constraints=wrapper._normalize_optimization_constraints(
+                nonlinear_inequality_constraints=[lambda X: X[..., 0] - 0.5],
+                batch_initial_conditions=initial_conditions,
+                nonlinear_optimization_retries=1,
+            ),
+        )
+
+    assert len(calls) == 1
+    torch.testing.assert_close(calls[0]["batch_initial_conditions"], initial_conditions)
+
+
+def test_nonlinear_optimization_retries_must_be_non_negative(single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+
+    with pytest.raises(ValueError, match="nonlinear_optimization_retries"):
+        wrapper._normalize_optimization_constraints(
+            nonlinear_inequality_constraints=[lambda X: X[..., 0]],
+            nonlinear_optimization_retries=-1,
+        )
+
+
+def test_optimize_uses_configured_nonlinear_controls(monkeypatch, single_fidelity_data_file, tmp_path):
+    settings = ConfigSettings("GP")
+    settings.set_setting(
+        "optimization",
+        {
+            "nonlinear_mode": "initialization-only",
+            "nonlinear_initial_raw_samples": 16,
+            "nonlinear_initial_max_tries": 2,
+            "nonlinear_optimization_retries": 0,
+        },
+    )
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    class FakeModel:
+        def eval(self):
+            return None
+
+    def fake_get_candidates(**kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.2, 0.3]]), torch.tensor(1.0)
+
+    monkeypatch.setattr(wrapper, "load_model", lambda learner_file: FakeModel())
+    monkeypatch.setattr(wrapper, "_configure_torch_threads", lambda settings: None)
+    monkeypatch.setattr(wrapper, "get_candidates", fake_get_candidates)
+
+    wrapper.optimize(
+        outfile=str(tmp_path / "candidates.npy"),
+        learner_file="learner.ckpt",
+        acq_method="EI",
+        nonlinear_inequality_constraints=[lambda X: X[..., 0]],
+    )
+
+    constraints = captured["optimization_constraints"]
+    assert constraints.nonlinear_mode == "initialization_only"
+    assert constraints.nonlinear_initial_raw_samples == 16
+    assert constraints.nonlinear_initial_max_tries == 2
+    assert constraints.nonlinear_optimization_retries == 0
+
+
+def test_optimize_direct_nonlinear_controls_override_config(monkeypatch, single_fidelity_data_file, tmp_path):
+    settings = ConfigSettings("GP")
+    settings.set_setting("optimization", {"nonlinear_optimization_retries": 3})
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+    captured = {}
+
+    class FakeModel:
+        def eval(self):
+            return None
+
+    def fake_get_candidates(**kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.2, 0.3]]), torch.tensor(1.0)
+
+    monkeypatch.setattr(wrapper, "load_model", lambda learner_file: FakeModel())
+    monkeypatch.setattr(wrapper, "_configure_torch_threads", lambda settings: None)
+    monkeypatch.setattr(wrapper, "get_candidates", fake_get_candidates)
+
+    wrapper.optimize(
+        outfile=str(tmp_path / "candidates.npy"),
+        learner_file="learner.ckpt",
+        acq_method="EI",
+        nonlinear_inequality_constraints=[lambda X: X[..., 0]],
+        nonlinear_optimization_retries=0,
+    )
+
+    assert captured["optimization_constraints"].nonlinear_optimization_retries == 0
+
+
+def test_nonlinear_q_batch_initial_conditions_are_assembled_from_feasible_points(
+    monkeypatch, single_fidelity_data_file
+):
+    settings = ConfigSettings("GP")
+    settings.set_setting("optimization", {"profile": "fast", "num_restarts_high": 2})
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+        random_seed=123,
+    )
+    captured = {}
+
+    class FakeAcq:
+        def __call__(self, X):
+            return X.sum(dim=(-1, -2))
+
+    def fake_draw_sobol_samples(bounds, n, q, seed):
+        assert q == 1
+        return torch.tensor(
+            [
+                [[0.9, 0.1]],
+                [[0.8, 0.1]],
+                [[0.7, 0.1]],
+                [[0.6, 0.1]],
+                [[0.5, 0.1]],
+                [[0.4, 0.1]],
+            ],
+            dtype=torch.float32,
+        )
+
+    def fake_optimize_acqf(*args, **kwargs):
+        captured.update(kwargs)
+        return torch.tensor([[0.9, 0.1], [0.8, 0.1], [0.7, 0.1]]), torch.tensor(1.0)
+
+    monkeypatch.setattr("deepopt.models.qExpectedImprovement", lambda *args, **kwargs: FakeAcq())
+    monkeypatch.setattr("deepopt.models.draw_sobol_samples", fake_draw_sobol_samples)
+    monkeypatch.setattr("deepopt.models.optimize_acqf", fake_optimize_acqf)
+
+    wrapper._get_candidates_sf(
+        model=object(),
+        acq_method="EI",
+        q=3,
+        optimization_constraints=wrapper._normalize_optimization_constraints(
+            nonlinear_inequality_constraints=[lambda X: X[..., 0] - 0.35],
+            nonlinear_mode="initialization_only",
+            nonlinear_initial_raw_samples=6,
+            nonlinear_initial_max_tries=1,
+        ),
+    )
+
+    initial_conditions = captured["batch_initial_conditions"]
+    assert initial_conditions.shape == torch.Size([2, 3, 2])
+    assert torch.all(initial_conditions[..., 0] >= 0.35)
+    assert "nonlinear_inequality_constraints" not in captured
+
+
+def test_multi_fidelity_rejects_nonlinear_constraints(multi_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(multi_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        multi_fidelity=True,
+        device="cpu",
+    )
+
+    with pytest.raises(NotImplementedError, match="single-fidelity"):
+        wrapper._normalize_optimization_constraints(nonlinear_inequality_constraints=[lambda X: X[..., 0]])
+
+
+def test_model_rejects_non_integer_constraint_indices(single_fidelity_data_file):
+    settings = ConfigSettings("GP")
+    bounds = np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32)
+    wrapper = GPModel(
+        data_file=str(single_fidelity_data_file),
+        bounds=bounds,
+        config_settings=settings,
+        device="cpu",
+    )
+
+    with pytest.raises(ValueError, match="indices must be integers"):
+        wrapper._normalize_optimization_constraints(inequality_constraints=[([1.9], [1.0], 0.0)])
 
 
 def test_multi_fidelity_candidate_generation_uses_resolved_optimization_settings(
