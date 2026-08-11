@@ -5,7 +5,6 @@ import torch
 
 pytest.importorskip("botorch")
 pytest.importorskip("gpytorch")
-pytest.importorskip("ray")
 
 from deepopt.deepopt_cli import deepopt_cli, get_deepopt_model
 from deepopt.models import DEEPOPT_CHECKPOINT_KEY, AcquisitionOptimizationConstraints, DelUQModel, GPModel, NNEnsembleModel

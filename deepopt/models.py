@@ -15,9 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Type, U
 
 import numpy as np
 import psutil
-import ray
 import torch
-from botorch import fit_gpytorch_model
+from deepopt._compat import OptionalDependencyError, fit_gpytorch_model, make_sobol_qmc_normal_sampler, require_ray_for_deluq
 from botorch.acquisition import PosteriorMean, qExpectedImprovement, qNoisyExpectedImprovement
 from botorch.acquisition.cost_aware import InverseCostWeightedUtility
 from botorch.acquisition.fixed_feature import FixedFeatureAcquisitionFunction
@@ -33,11 +32,7 @@ from botorch.optim.initializers import gen_batch_initial_conditions
 from botorch.optim.optimize import optimize_acqf, optimize_acqf_mixed
 from botorch.utils.sampling import draw_sobol_samples
 from botorch.sampling.qmc import MultivariateNormalQMCEngine
-from botorch.sampling.samplers import SobolQMCNormalSampler
 from gpytorch.mlls.exact_marginal_log_likelihood import ExactMarginalLogLikelihood
-from ray import tune
-from ray.air.config import RunConfig
-from ray.tune.schedulers import ASHAScheduler
 from sklearn.model_selection import KFold
 from torch.utils.data import DataLoader, SubsetRandomSampler, TensorDataset
 
@@ -1391,8 +1386,8 @@ class DeepoptBaseModel(ABC):
             mfkg_acqf = qMultiFidelityKnowledgeGradient(
                 model=model,
                 num_fantasies=n_fantasies,
-                sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
-                inner_sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
+                sampler=make_sobol_qmc_normal_sampler(n_fantasies, seed=self.random_seed),
+                inner_sampler=make_sobol_qmc_normal_sampler(n_fantasies, seed=self.random_seed),
                 current_value=max_pmean,
                 cost_aware_utility=cost_aware_utility,
                 project=self._project,
@@ -1512,8 +1507,8 @@ class DeepoptBaseModel(ABC):
             q_acq = qKnowledgeGradient(
                 model=model,
                 num_fantasies=n_fantasies,
-                sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
-                inner_sampler=SobolQMCNormalSampler(n_fantasies, seed=self.random_seed),
+                sampler=make_sobol_qmc_normal_sampler(n_fantasies, seed=self.random_seed),
+                inner_sampler=make_sobol_qmc_normal_sampler(n_fantasies, seed=self.random_seed),
                 current_value=max_pmean,
                 objective=risk_objective,
             )
@@ -1994,35 +1989,47 @@ class DelUQModel(DeepoptBaseModel):
         gpu_count = torch.cuda.device_count()  # outputs warning when gpu not found
         warnings.resetwarnings()
 
-        ray.init(num_cpus=cpu_count, num_gpus=gpu_count)
-        num_samples = 20
-        search_space = {
-            "variance": tune.loguniform((2**-3) ** 2, 5e-1),  # (2 ** -3) ** 2,
-            "learning_rate": tune.loguniform(2e-4, 5e-1),
-            "seed": tune.randint(0, 10000),
-        }
-        trainable_with_resources = tune.with_resources(
-            trainable=self._deluq_experiment,
-            resources={
-                "cpu": 1 if cpu_count < num_samples else 2,
-            },
-        )
-        tuner = tune.Tuner(
-            trainable=trainable_with_resources,
-            run_config=RunConfig(
-                verbose=0,
-            ),
-            tune_config=tune.TuneConfig(
-                num_samples=num_samples,
-                scheduler=ASHAScheduler(
-                    metric="score",
-                    mode="min",
+        ray, tune, RunConfig, ASHAScheduler = require_ray_for_deluq()
+        try:
+            ray.init(num_cpus=cpu_count, num_gpus=gpu_count)
+        except Exception as exc:
+            raise OptionalDependencyError(
+                "delUQ training requires Ray Tune, but Ray could not be initialized in this environment. "
+                "Non-delUQ DeepOpt models do not require Ray; use model_type='GP' or "
+                "model_type='nnEnsemble', or install a Ray build compatible with this platform."
+            ) from exc
+
+        try:
+            num_samples = 20
+            search_space = {
+                "variance": tune.loguniform((2**-3) ** 2, 5e-1),  # (2 ** -3) ** 2,
+                "learning_rate": tune.loguniform(2e-4, 5e-1),
+                "seed": tune.randint(0, 10000),
+            }
+            trainable_with_resources = tune.with_resources(
+                trainable=self._deluq_experiment,
+                resources={
+                    "cpu": 1 if cpu_count < num_samples else 2,
+                },
+            )
+            tuner = tune.Tuner(
+                trainable=trainable_with_resources,
+                run_config=RunConfig(
+                    verbose=0,
                 ),
-            ),
-            param_space=search_space,
-        )
-        result = tuner.fit()
-        best_result = result.get_best_result(metric="score", mode="min")
+                tune_config=tune.TuneConfig(
+                    num_samples=num_samples,
+                    scheduler=ASHAScheduler(
+                        metric="score",
+                        mode="min",
+                    ),
+                ),
+                param_space=search_space,
+            )
+            result = tuner.fit()
+            best_result = result.get_best_result(metric="score", mode="min")
+        finally:
+            ray.shutdown()
         print(best_result)
 
         for key, val in best_result.config.items():
@@ -2057,7 +2064,6 @@ class DelUQModel(DeepoptBaseModel):
             fname = basename(outfile)
         model.save_ckpt(join(getcwd(), dirname(outfile)), fname, checkpoint_metadata=self._checkpoint_metadata())
         self.learner_file = join(getcwd(), dirname(outfile), f"{fname}.ckpt")
-        ray.shutdown()
         return model
 
     def load_model(self, learner_file: str) -> Type[Model]:
@@ -2148,7 +2154,6 @@ class NNEnsembleModel(DeepoptBaseModel):
             fname = basename(outfile)
         model.save_ckpt(join(getcwd(), dirname(outfile)), fname, checkpoint_metadata=self._checkpoint_metadata())
         self.learner_file = join(getcwd(), dirname(outfile), f"{fname}.ckpt")
-        ray.shutdown()
         return model
 
     def load_model(self, learner_file: str) -> Type[Model]:
