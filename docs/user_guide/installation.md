@@ -19,6 +19,14 @@ To verify that the DeepOpt library installed properly, run:
 deepopt -h
 ```
 
+TabPFN support is optional and currently requires a TabPFN release with the legacy tensor backend used by DeepOpt acquisition optimization. Install the optional extra or install a compatible TabPFN release separately:
+
+```bash
+pip install "deepopt[tabpfn]"
+# or
+pip install "tabpfn<2"
+```
+
 ## Installing From GitHub
 
 !!! note

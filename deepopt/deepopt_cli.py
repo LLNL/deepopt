@@ -7,23 +7,14 @@ import importlib.util
 import inspect
 import json
 from gettext import ngettext
-from typing import Any, Callable, List, Mapping, Tuple, Union
+from typing import Any, Callable, List, Mapping, Tuple, Type, Union
 
 import click
-import torch
 import numpy as np
 from click.core import iter_params_for_processing
 
 from deepopt.configuration import ConfigSettings
 from deepopt.defaults import Defaults
-from deepopt.models import (
-    AcquisitionOptimizationConstraints,
-    DelUQModel,
-    GPModel,
-    NNEnsembleModel,
-    get_checkpoint_metadata,
-    load_deepopt_wrapper,
-)
 
 
 def _parse_linear_constraints(value: Union[str, None], option_name: str) -> Union[List[Tuple[List[int], List[float], float]], None]:
@@ -111,7 +102,7 @@ def _load_nonlinear_constraints(reference: Union[str, None]) -> Union[List[Calla
     raise click.BadParameter("Nonlinear constraint function must return a callable or a list of callables.")
 
 
-def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel, NNEnsembleModel]:
+def get_deepopt_model(model_type: str) -> Type[Any]:
     """
     Given the type of model by the user, return the correct model
     object from the DeepOpt library to use for training/optimizing.
@@ -120,14 +111,18 @@ def get_deepopt_model(model_type: str) -> Union[GPModel, DelUQModel, NNEnsembleM
 
     :returns: A DeepOpt model to use for training/optimizing
     """
+    from deepopt.models import DelUQModel, GPModel, NNEnsembleModel, TabPFNModel
+
     if model_type == "GP":
         deepopt_model = GPModel
     elif model_type == "delUQ":
         deepopt_model = DelUQModel
     elif model_type == "nnEnsemble":
         deepopt_model = NNEnsembleModel
+    elif model_type == "TabPFN":
+        deepopt_model = TabPFNModel
     else:
-        raise ValueError(f"The model type {model_type} is not a valid DeepOpt model. Valid models are 'GP', 'delUQ', and 'nnEnsemble'.")
+        raise ValueError(f"The model type {model_type} is not a valid DeepOpt model. Valid models are 'GP', 'delUQ', 'nnEnsemble', and 'TabPFN'.")
 
     return deepopt_model
 
@@ -265,7 +260,7 @@ def deepopt_cli():
     help="What kind of surrogate are you using?",
     default=Defaults.model_type,
     show_default=True,
-    type=click.Choice(["GP", "delUQ","nnEnsemble"]),
+    type=click.Choice(["GP", "delUQ", "nnEnsemble", "TabPFN"]),
 )
 @click.option(
     "-c",
@@ -391,7 +386,7 @@ def learn(
     help="What kind of surrogate are you using?",
     show_default=True,
     default=Defaults.model_type,
-    type=click.Choice(["GP", "delUQ","nnEnsemble"]),
+    type=click.Choice(["GP", "delUQ", "nnEnsemble", "TabPFN"]),
 )
 @click.option(
     "-c",
@@ -562,6 +557,8 @@ def optimize(
     constraints are specified in original input units. Omitted nonlinear control
     flags fall back to values in the ``optimization`` config section.
     """
+    from deepopt.models import AcquisitionOptimizationConstraints, get_checkpoint_metadata, load_deepopt_wrapper
+
     checkpoint_metadata = get_checkpoint_metadata(learner_file)
     if checkpoint_metadata is None:
         # Legacy checkpoints do not include the data and bounds needed to rebuild a wrapper.

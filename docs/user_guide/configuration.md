@@ -4,7 +4,7 @@
 
     Model training hyperparameters are only configurable for `nnEnsemble` and `delUQ` models; GP model training runs as-is. Optimization settings apply to all model types.
 
-DeepOpt supports YAML and JSON configuration files. Model-training settings are merged over model-specific defaults, and candidate-generation settings live under a top-level `optimization:` section.
+DeepOpt supports YAML and JSON configuration files. Model-training settings are merged over model-specific defaults, and candidate-generation settings live under a top-level `optimization:` section. `TabPFN` uses optional TabPFN-specific settings such as `tabpfn_api`, `tabpfn_version`, `max_tokens_per_forward`, and `max_weight`.
 
 ## The Base Configuration Options
 

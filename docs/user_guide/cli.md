@@ -21,7 +21,7 @@ Important options:
 | `-i`, `--infile` | Training data `.npz` file containing `X` and `y`. |
 | `-o`, `--outfile` | Checkpoint path to write. |
 | `-b`, `--bounds` | JSON list of `[lower, upper]` bounds in original input units. |
-| `-m`, `--model-type` | Surrogate type: `GP`, `delUQ`, or `nnEnsemble`. |
+| `-m`, `--model-type` | Surrogate type: `GP`, `delUQ`, `nnEnsemble`, or optional `TabPFN`. |
 | `-c`, `--config-file` | Optional YAML/JSON config file. |
 | `-r`, `--random-seed` | Random seed for training and candidate generation. |
 | `-k`, `--k-folds` | Number of folds used by delUQ training. |
@@ -42,7 +42,7 @@ Core options:
 | ------ | ------- |
 | `-l`, `--learner-file` | Checkpoint produced by `deepopt learn`. |
 | `-o`, `--outfile` | NumPy `.npy` file to write proposed candidates into. |
-| `-a`, `--acq-method` | Acquisition method: `EI`, `NEI`, `KG`, or `MaxValEntropy`. |
+| `-a`, `--acq-method` | Acquisition method: `EI`, `NEI`, `KG`, or `MaxValEntropy`. `TabPFN` does not currently support `KG`, and its `MaxValEntropy` path supports only one candidate at a time. |
 | `-q`, `--num-candidates` | Number of candidates to propose. |
 | `-c`, `--config-file` | Optional optimize-time config overrides. |
 | `-r`, `--random-seed` | Random seed for candidate generation when using legacy checkpoints. |

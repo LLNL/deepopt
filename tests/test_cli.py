@@ -5,10 +5,9 @@ import torch
 
 pytest.importorskip("botorch")
 pytest.importorskip("gpytorch")
-pytest.importorskip("ray")
 
 from deepopt.deepopt_cli import deepopt_cli, get_deepopt_model
-from deepopt.models import DEEPOPT_CHECKPOINT_KEY, AcquisitionOptimizationConstraints, DelUQModel, GPModel, NNEnsembleModel
+from deepopt.models import DEEPOPT_CHECKPOINT_KEY, AcquisitionOptimizationConstraints, DelUQModel, GPModel, NNEnsembleModel, TabPFNModel
 
 pytestmark = pytest.mark.requires_botorch
 
@@ -17,6 +16,7 @@ def test_get_deepopt_model_supported_names():
     assert get_deepopt_model("GP") is GPModel
     assert get_deepopt_model("delUQ") is DelUQModel
     assert get_deepopt_model("nnEnsemble") is NNEnsembleModel
+    assert get_deepopt_model("TabPFN") is TabPFNModel
 
 
 def test_get_deepopt_model_rejects_invalid_name():
@@ -38,6 +38,7 @@ def test_cli_help_lists_commands_and_core_options():
     assert "--outfile" in result.output
     assert "--bounds" in result.output
     assert "--model-type" in result.output
+    assert "TabPFN" in result.output
 
     result = runner.invoke(deepopt_cli, ["optimize", "--help"])
     assert result.exit_code == 0

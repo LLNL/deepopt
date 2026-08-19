@@ -12,7 +12,7 @@ Easily bring Bayesian optimization to your workflows with DeepOpt!
 
 ## Why DeepOpt?
 
-DeepOpt is a powerful and versatile Bayesian optimization framework that provides users with the flexibility to choose between Gaussian process (`GP`) and neural network (`delUQ` and `nnEnsemble`) surrogates. This flexibility empowers users to select the most suitable surrogate model for their specific optimization problem, taking into account factors such as the complexity of the objective function and the available computational resources.
+DeepOpt is a powerful and versatile Bayesian optimization framework that provides users with the flexibility to choose between Gaussian process (`GP`), neural network (`delUQ` and `nnEnsemble`), and optional TabPFN (`TabPFN`) surrogates. This flexibility empowers users to select the most suitable surrogate model for their specific optimization problem, taking into account factors such as the complexity of the objective function and the available computational resources.
 
 ## Getting Started with DeepOpt
 
@@ -66,7 +66,7 @@ model = model_class(data_file="sims.npz", bounds=bounds, config_settings=cs)  #(
 
 1. Input dimension must match data file (`sims.npz` in this case)
 2. We'll use a GP model for simplicity
-3. The `get_deepopt_model` function will return the appropriate class to use for your `model_type`: `GPModel` for `GP`, `DelUQModel` for `delUQ`, and `NNEnsembleModel` for `nnEnsemble`. These models include all the high-level functionality required for the `learn` and `optimize` commands.
+3. The `get_deepopt_model` function will return the appropriate class to use for your `model_type`: `GPModel` for `GP`, `DelUQModel` for `delUQ`, `NNEnsembleModel` for `nnEnsemble`, and `TabPFNModel` for optional `TabPFN`. These models include all the high-level functionality required for the `learn` and `optimize` commands.
 4. This sets up the model configuration. Since we don't pass a configuration file, the default configuration will be used.
 5. Learning and optimizing will take place within these input bounds
 6. Initialize the GP model

@@ -43,6 +43,13 @@ NNENSEMBLE_CONFIG = {"n_estimators": 100,
 
 GP_CONFIG = {}
 
+TABPFN_CONFIG = {
+    "max_weight": 1,
+    "tabpfn_api": "auto",
+    "tabpfn_version": "v2",
+    "max_tokens_per_forward": 3000,
+}
+
 # Acquisition optimization profiles used by ConfigSettings['optimization'].
 OPTIMIZATION_PROFILES = {
     "balanced": {
@@ -105,7 +112,7 @@ class Defaults:
 
     :cvar random_seed: The default random seed. `Default value: 4321`
     :cvar k_folds: The default k-folds value. `Default value: 5`
-    :cvar model_type: The default model type. Options here are 'GP', 'delUQ', or 'nnEnsemble'.
+    :cvar model_type: The default model type. Options here are 'GP', 'delUQ', 'nnEnsemble', or 'TabPFN'.
         `Default value: 'GP'`
     :cvar multi_fidelity: The default value on whether to run multi-fidelity
         settings or not. `Default value: False`

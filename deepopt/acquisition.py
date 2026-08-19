@@ -43,6 +43,7 @@ from typing import Any, Callable, Optional
 
 import numpy as np
 import torch
+from deepopt._compat import make_sobol_qmc_normal_sampler
 from botorch.acquisition.acquisition import AcquisitionFunction
 from botorch.acquisition.cost_aware import CostAwareUtility, InverseCostWeightedUtility
 from botorch.acquisition.objective import PosteriorTransform
@@ -50,7 +51,6 @@ from botorch.exceptions.errors import UnsupportedError
 from botorch.models.cost import AffineFidelityCostModel
 from botorch.models.model import Model
 from botorch.models.utils import check_no_nans
-from botorch.sampling.samplers import SobolQMCNormalSampler
 from botorch.utils.transforms import match_batch_shape, t_batch_mode_transform
 from gpytorch.functions import inv_quad
 from gpytorch.utils.cholesky import psd_safe_cholesky
@@ -360,8 +360,8 @@ class qMaxValueEntropy(DiscreteMaxValueBase):
             train_inputs=train_inputs,
         )
         self._init_model = model  # used for `fantasize()` when setting `X_pending`
-        self.sampler = SobolQMCNormalSampler(num_y_samples, seed=kwargs.get("seed"))
-        self.fantasies_sampler = SobolQMCNormalSampler(num_fantasies, seed=kwargs.get("seed"))
+        self.sampler = make_sobol_qmc_normal_sampler(num_y_samples, seed=kwargs.get("seed"))
+        self.fantasies_sampler = make_sobol_qmc_normal_sampler(num_fantasies, seed=kwargs.get("seed"))
         self.num_fantasies = num_fantasies
         self.set_X_pending(X_pending)  # this did not happen in the super constructor
 
