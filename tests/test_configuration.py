@@ -3,7 +3,7 @@ import json
 import pytest
 
 from deepopt.configuration import ConfigSettings
-from deepopt.defaults import DELUQ_CONFIG, GP_CONFIG, NNENSEMBLE_CONFIG, OPTIMIZATION_PROFILES, Defaults
+from deepopt.defaults import DELUQ_CONFIG, GP_CONFIG, NNENSEMBLE_CONFIG, OPTIMIZATION_PROFILES, TABPFN_CONFIG, Defaults
 
 
 def test_config_settings_load_defaults_for_supported_models():
@@ -11,6 +11,7 @@ def test_config_settings_load_defaults_for_supported_models():
         "GP": GP_CONFIG,
         "delUQ": DELUQ_CONFIG,
         "nnEnsemble": NNENSEMBLE_CONFIG,
+        "TabPFN": TABPFN_CONFIG,
     }
 
     for model_type, defaults in cases.items():
@@ -130,6 +131,13 @@ def test_config_settings_loads_nested_optimization_section(tmp_path):
         "nonlinear_initial_max_tries": 2,
         "nonlinear_optimization_retries": 0,
     }
+
+
+def test_tabpfn_default_keys_regression():
+    assert TABPFN_CONFIG["max_weight"] == 1
+    assert TABPFN_CONFIG["tabpfn_api"] == "auto"
+    assert TABPFN_CONFIG["tabpfn_version"] == "v2"
+    assert TABPFN_CONFIG["max_tokens_per_forward"] == 3000
 
 
 def test_nnensemble_default_keys_regression():

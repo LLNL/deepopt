@@ -11,7 +11,7 @@ The metadata schema includes:
 | Field | Meaning |
 | ----- | ------- |
 | `schema_version` | DeepOpt checkpoint metadata schema version. |
-| `model_type` | One of `GP`, `delUQ`, or `nnEnsemble`. |
+| `model_type` | One of `GP`, `delUQ`, `nnEnsemble`, or `TabPFN`. |
 | `training_data` | Dictionary containing `X` and `y` tensors. |
 | `bounds` | Bounds tensor with shape `2 x input_dim`, in original input units. |
 | `config_settings` | Saved DeepOpt configuration settings. |

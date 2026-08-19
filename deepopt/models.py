@@ -43,6 +43,7 @@ from deepopt.deltaenc import DeltaEnc
 from deepopt.input_scaling import InputScaler, reject_deprecated_original_scale
 from deepopt.nn_ensemble import NNEnsemble
 from deepopt.output_scaling import OutputScaler, StandardizeOutputScaler
+from deepopt.surrogate_tabpfn import TabPFN
 from deepopt.surrogate_utils import MLP as Arch
 from deepopt.surrogate_utils import create_optimizer
 
@@ -177,7 +178,7 @@ def get_checkpoint_metadata(learner_file: str, map_location: str = "cpu") -> Opt
             f"This DeepOpt version supports schema version {DEEPOPT_CHECKPOINT_SCHEMA_VERSION}."
         )
     model_type = metadata.get("model_type")
-    if model_type not in {"GP", "delUQ", "nnEnsemble"}:
+    if model_type not in {"GP", "delUQ", "nnEnsemble", "TabPFN"}:
         raise ValueError(f"DeepOpt checkpoint metadata has invalid model_type {model_type}.")
     required_fields = {"training_data", "bounds", "config_settings"}
     missing_fields = required_fields.difference(metadata)
@@ -220,17 +221,17 @@ def load_deepopt_wrapper(learner_file: str, device: str = "auto", verbose: bool 
     :param learner_file: Path to a checkpoint containing ``deepopt_checkpoint`` metadata.
     :param device: Device requested for the wrapper and underlying model.
     :param verbose: If ``True``, enable verbose model evaluation output where supported.
-    :returns: A ``GPModel``, ``DelUQModel``, or ``NNEnsembleModel`` initialized from checkpoint metadata.
+    :returns: A ``GPModel``, ``DelUQModel``, ``NNEnsembleModel``, or ``TabPFNModel`` initialized from checkpoint metadata.
     :raises ValueError: If the checkpoint is legacy or has invalid metadata.
     """
     metadata = get_checkpoint_metadata(learner_file)
     if metadata is None:
         raise ValueError(
             "Checkpoint does not contain DeepOpt self-describing metadata. Load it using the legacy explicit path: "
-            "construct the appropriate GPModel, DelUQModel, or NNEnsembleModel with data_file, bounds, "
+            "construct the appropriate GPModel, DelUQModel, NNEnsembleModel, or TabPFNModel with data_file, bounds, "
             "config_settings, and multi_fidelity, then call load_model(...)."
         )
-    model_classes = {"GP": GPModel, "delUQ": DelUQModel, "nnEnsemble": NNEnsembleModel}
+    model_classes = {"GP": GPModel, "delUQ": DelUQModel, "nnEnsemble": NNEnsembleModel, "TabPFN": TabPFNModel}
     config_settings = _config_settings_from_checkpoint(metadata)
     return model_classes[metadata["model_type"]](
         config_settings=config_settings,
@@ -1571,6 +1572,11 @@ class DeepoptBaseModel(ABC):
         current_max = self.full_train_Y[self.full_train_X[:,-1]==(self.num_fidelities-1)].max(
             ) if self.multi_fidelity else self.full_train_Y.max()
         print(f"Number of simulations: {len(self.full_train_X)}. Current max: {current_max.item():.5f}")
+        if self.config_settings.get_setting("model_type") == "TabPFN":
+            if acq_method == "KG":
+                raise NotImplementedError("KG acquisition requires model fantasizing, which TabPFN does not currently support.")
+            if acq_method == "MaxValEntropy" and q > 1:
+                raise NotImplementedError("TabPFN MaxValEntropy currently supports only one candidate at a time.")
 
         if self.multi_fidelity:
             candidates, acq_value = self._get_candidates_mf(
@@ -2105,6 +2111,53 @@ class DelUQModel(DeepoptBaseModel):
         dir_name = dirname(learner_file)
         model.load_ckpt(dir_name, file_name)
         return model
+
+class TabPFNModel(DeepoptBaseModel):
+    """
+    DeepOpt wrapper for optional TabPFN surrogates.
+    """
+
+    def _make_tabpfn(self) -> TabPFN:
+        return TabPFN(
+            config=self.config_settings,
+            X_train=self.full_train_X,
+            y_train=self.full_train_Y_scaled,
+            multi_fidelity=self.multi_fidelity,
+            seed=self.random_seed,
+            device=self.device,
+            output_scaler=self.output_scaler,
+            input_scaler=self.input_scaler,
+        )
+
+    def train(self, outfile: str) -> Type[Model]:
+        """
+        Construct a TabPFN surrogate and save a lightweight DeepOpt checkpoint.
+        """
+        print("Training TabPFN Surrogate.")
+        model = self._make_tabpfn()
+        state = {
+            "input_scaler": self.input_scaler.state_dict(),
+            "output_scaler": self.output_scaler.state_dict(),
+            "tabpfn_backend": {"api": model.backend_api},
+            DEEPOPT_CHECKPOINT_KEY: self._checkpoint_metadata(),
+        }
+        self.learner_file = join(getcwd(), dirname(outfile), basename(outfile))
+        torch.save(state, self.learner_file)
+        return model
+
+    def load_model(self, learner_file: str) -> Type[Model]:
+        """
+        Reconstruct a TabPFN surrogate from a DeepOpt checkpoint.
+        """
+        state = _torch_load(learner_file, map_location=self.device)
+        if "input_scaler" in state:
+            self.input_scaler = InputScaler.from_state_dict(state["input_scaler"], device=self.device)
+            self.full_train_X = self.input_scaler.transform(self.X_orig).to(self.device)
+        if "output_scaler" in state:
+            self.output_scaler = OutputScaler.from_state_dict(state["output_scaler"], device=self.device)
+            self.full_train_Y_scaled = self.output_scaler.transform(self.full_train_Y, self.full_train_X)
+        return self._make_tabpfn()
+
 
 class NNEnsembleModel(DeepoptBaseModel):
     """
